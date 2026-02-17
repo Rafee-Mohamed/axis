@@ -8,7 +8,7 @@ import java.util.stream.Collectors;
 
 /**
  * A set of voters that forms the majority quorum
- * @param majority - set of voters
+ * @param voters - set of voters
  */
 public record MajorityConfig(Set<NodeId> voters) {
 

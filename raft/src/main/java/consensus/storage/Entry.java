@@ -11,7 +11,8 @@ public record Entry(
 ) {
     public enum Type {
         PLACEHOLDER,         // Marker entry (used at snapshot boundary, new leader entry)
-        NORMAL,              // Regular data entry
+        NORMAL,              // Regular entry with id, data
+        DATA,                //  data entry
         MEMBERSHIP_CHANGE    // Configuration change entry
     }
 
@@ -25,6 +26,8 @@ public record Entry(
     public static Entry normal(long term, long index, byte[] data) {
         return new Entry(Type.NORMAL, term, index, data);
     }
+
+    public static Entry data(byte[] data) { return new Entry(Type.DATA, 0, 0, data); }
 
     public static Entry membershipChange(long term, long index, byte[] data) {
         return new Entry(Type.MEMBERSHIP_CHANGE, term, index, data);

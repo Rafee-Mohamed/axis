@@ -110,13 +110,18 @@ public class PeerProgress {
     private final Inflight.Config inflightConfig;
     
     /**
-     * Creates a new PeerProgress starting in Probe state.
+     * Creates a new PeerProgress.
      *
      * @param inflightConfig configuration for flow control (max messages, max bytes)
      */
     public PeerProgress(Inflight.Config inflightConfig) {
         this.inflightConfig = inflightConfig;
+        this.roleType = RoleType.FOLLOWER;
         this.state = new ReplicationState.Probe();
+        this.active = false;
+        this.match = 0;
+        this.sentCommit = 0;
+        this.next = 1;
     }
 
     /* ==================== GETTERS ==================== */

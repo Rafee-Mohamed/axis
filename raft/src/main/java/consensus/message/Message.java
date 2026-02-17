@@ -30,7 +30,8 @@ public sealed interface Message {
             long prevLogTerm,       // term of prevLogIndex entry
             List<Entry> entries,    // log entries to store (empty for heartbeat)
             long leaderCommit       // leader's commitIndex
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * Follower → Leader: Response to AppendEntries.
@@ -43,7 +44,8 @@ public sealed interface Message {
             long matchIndex,        // highest index known to be replicated (on success)
             long rejectHint,        // hint for leader to find correct nextIndex (on rejection)
             long rejectHintTerm     // term of the conflicting entry (for faster backtracking)
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * Leader → Follower: Heartbeat (lightweight, no entries).
@@ -54,7 +56,8 @@ public sealed interface Message {
             NodeId from,
             long term,
             long leaderCommit       // leader's commitIndex
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * Follower → Leader: Response to Heartbeat.
@@ -63,11 +66,12 @@ public sealed interface Message {
             NodeId to,
             NodeId from,
             long term
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * Leader → Follower: Install snapshot when follower is too far behind.
-     *
+     * <p>
      * Raft paper: InstallSnapshot RPC
      */
     record InstallSnapshot(
@@ -75,7 +79,8 @@ public sealed interface Message {
             NodeId from,
             long term,
             Snapshot snapshot       // contains: lastIncludedIndex, lastIncludedTerm, data, config
-    ) implements Message {}
+    ) implements Message {
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ELECTION MESSAGES
@@ -83,16 +88,17 @@ public sealed interface Message {
 
     /**
      * Candidate → All: Request vote in election.
-     *
+     * <p>
      * Raft paper: RequestVote RPC
      */
     record RequestVote(
             NodeId to,
             NodeId from,
             long term,              // candidate's term
-            long lastLogIndex,      // index of candidate's last log entry
-            long lastLogTerm        // term of candidate's last log entry
-    ) implements Message {}
+            long lastLogTerm ,     // term of candidate's last log entry
+            long lastLogIndex     // index of candidate's last log entry
+    ) implements Message {
+    }
 
     /**
      * Voter → Candidate: Response to RequestVote.
@@ -102,31 +108,34 @@ public sealed interface Message {
             NodeId from,
             long term,
             boolean voteGranted     // true if candidate received vote
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * PreCandidate → All: Pre-vote before incrementing term.
-     *
+     * <p>
      * Prevents disruption from partitioned nodes.
      * Same fields as RequestVote.
      */
-    record PreVote(
+    record RequestPreVote(
             NodeId to,
             NodeId from,
             long term,              // would-be term (current + 1)
-            long lastLogIndex,
-            long lastLogTerm
-    ) implements Message {}
+            long lastLogTerm,
+            long lastLogIndex
+    ) implements Message {
+    }
 
     /**
      * Voter → PreCandidate: Response to PreVote.
      */
-    record PreVoteResponse(
+    record RequestPreVoteResponse(
             NodeId to,
             NodeId from,
             long term,
             boolean voteGranted
-    ) implements Message {}
+    ) implements Message {
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // LEADERSHIP TRANSFER MESSAGES
@@ -141,7 +150,8 @@ public sealed interface Message {
             NodeId from,
             long term,
             NodeId transferee       // the node that should become leader
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * Leader → Transferee: Tell the transferee to start election immediately.
@@ -151,7 +161,8 @@ public sealed interface Message {
             NodeId to,
             NodeId from,
             long term
-    ) implements Message {}
+    ) implements Message {
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // READ-ONLY QUERY MESSAGES
@@ -165,7 +176,8 @@ public sealed interface Message {
             NodeId from,
             long term,
             byte[] context          // opaque context returned with response
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * Leader → Follower: Response with committed index for read.
@@ -176,7 +188,8 @@ public sealed interface Message {
             long term,
             long readIndex,         // commit index at time of request
             byte[] context          // echoed context
-    ) implements Message {}
+    ) implements Message {
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // LOCAL MESSAGES (internal triggers, not sent over network)
@@ -187,14 +200,16 @@ public sealed interface Message {
      */
     record TriggerElection(
             NodeId from             // self
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * Internal: Trigger heartbeat broadcast (leader's heartbeat tick).
      */
     record TriggerHeartbeat(
             NodeId from             // self (leader)
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * Internal: Proposal from application.
@@ -202,7 +217,8 @@ public sealed interface Message {
     record Proposal(
             NodeId from,            // self
             byte[] data             // proposed data
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * Internal: Proposal for configuration change.
@@ -212,36 +228,14 @@ public sealed interface Message {
             List<MembershipChange> changes,
             MembershipTransition transition,
             byte[] context
-    ) implements Message {}
+    ) implements Message {
+    }
 
     /**
      * Internal: Check if leader still has quorum (CheckQuorum feature).
      */
     record CheckQuorum(
             NodeId from             // self (leader)
-    ) implements Message {}
-
-    /**
-     * Internal: Report that a peer is unreachable.
-     */
-    record PeerUnreachable(
-            NodeId from,            // self
-            NodeId unreachablePeer  // the unreachable peer
-    ) implements Message {}
-
-    /**
-     * Internal: Report snapshot send status.
-     */
-    record SnapshotStatus(
-            NodeId from,
-            NodeId peer,            // peer the snapshot was sent to
-            boolean success         // whether snapshot was received
-    ) implements Message {}
-
-    /**
-     * Internal: Forget current leader (used for certain failure scenarios).
-     */
-    record ForgetLeader(
-            NodeId from             // self
-    ) implements Message {}
+    ) implements Message {
+    }
 }
