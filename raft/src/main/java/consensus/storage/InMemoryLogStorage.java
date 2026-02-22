@@ -4,6 +4,7 @@ import consensus.algorithm.Snapshot;
 import consensus.membership.JointConfig;
 import consensus.membership.MajorityConfig;
 import consensus.membership.MembershipConfig;
+import consensus.membership.MembershipTransition;
 import consensus.node.PersistentState;
 
 import java.util.ArrayList;
@@ -17,7 +18,7 @@ public class InMemoryLogStorage implements LogStorage {
 
     public InMemoryLogStorage() {
         persistentState = new PersistentState(0, 0, null);
-        var membershipConfig = new MembershipConfig(new JointConfig(new MajorityConfig(Set.of()), null), Set.of(), Set.of(), false);
+        var membershipConfig = new MembershipConfig(new JointConfig(new MajorityConfig(Set.of()), null), Set.of(), Set.of(), MembershipTransition.JOINT_AUTO);
         snapshot = new Snapshot(0, 0, membershipConfig, new byte[0]);
         entries = new ArrayList<>(1024);
         entries.add(Entry.placeholder(0, 0));

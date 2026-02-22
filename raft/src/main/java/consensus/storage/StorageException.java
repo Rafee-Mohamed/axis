@@ -14,7 +14,7 @@ public class StorageException extends Exception {
 /**
  * Requested index has been compacted (included in snapshot).
  */
-class CompactedException extends StorageException {
+public class CompactedException extends StorageException {
     private final long requestedIndex;
 
     public CompactedException(long requestedIndex) {
@@ -30,7 +30,7 @@ class CompactedException extends StorageException {
 /**
  * Requested entry is not available (index beyond log).
  */
-class EntryUnavailableException extends StorageException {
+public class EntryUnavailableException extends StorageException {
     private final long requestedIndex;
 
     public EntryUnavailableException(long requestedIndex) {
@@ -47,7 +47,7 @@ class EntryUnavailableException extends StorageException {
  * Snapshot is temporarily unavailable (being prepared).
  * Raft will retry later.
  */
-class SnapshotUnavailableException extends StorageException {
+public class SnapshotUnavailableException extends StorageException {
     public SnapshotUnavailableException() {
         super("Snapshot is temporarily unavailable");
     }

@@ -16,17 +16,17 @@ public record MajorityConfig(Set<NodeId> voters) {
      * Calculate the committed index based on match indices.
      * Returns the highest index that has been replicated to a majority.
      *
-     * @param matchIndices map of nodeId → matchIndex (highest replicated index per node)
+     * @param indexer indexer that retrieves matchIndex of nodeId (highest replicated index per node)
      * @return highest committed index on majority of nodes (or 0 if no majority)
      */
-    public long committedIndex(Map<NodeId, Long> matchIndices) {
+    public long committedIndex(MatchIndexer indexer) {
         if (voters.isEmpty()) {
             return Long.MAX_VALUE;
         }
 
         long[] committedIndices = voters
                 .stream()
-                .map(nodeId -> matchIndices.getOrDefault(nodeId, 0L))
+                .map(nodeId -> indexer.match(nodeId).orElse(0))
                 .sorted()
                 .mapToLong(Long::longValue)
                 .toArray();
@@ -74,5 +74,9 @@ public record MajorityConfig(Set<NodeId> voters) {
             return VoteResult.LOST;
 
         return VoteResult.PENDING;
+    }
+
+    public boolean contains(NodeId id) {
+        return voters.contains(id);
     }
 }

@@ -31,13 +31,13 @@ public record JointConfig(
     /**
      * Committed index requires majority in BOTH configs during joint consensus.
      */
-    public long committedIndex(Map<NodeId, Long> matchIndices) {
-        var currentCommittedIndex = current.committedIndex(matchIndices);
+    public long committedIndex(MatchIndexer indexer) {
+        var currentCommittedIndex = current.committedIndex(indexer);
 
         if (!isJoint())
             return currentCommittedIndex;
 
-        var incomingCommittedIndex = incoming.committedIndex(matchIndices);
+        var incomingCommittedIndex = incoming.committedIndex(indexer);
         // Both must agree - take the minimum
         return Math.min(currentCommittedIndex, incomingCommittedIndex);
     }
@@ -78,5 +78,22 @@ public record JointConfig(
             allVoters.addAll(incoming.voters());
 
         return allVoters;
+    }
+
+    /**
+     * Checks if a node is a voter in this joint configuration.
+     *
+     * <p>In normal (non-joint) mode, only the {@code current} config exists
+     * — the node must be in {@code current}. During joint consensus, a node
+     * is a voter if it appears in either {@code current} (the outgoing/old
+     * config) or {@code incoming} (the new config being adopted). Both
+     * configs participate in elections and commit decisions until the joint
+     * state is left.</p>
+     *
+     * @param id the node to check
+     * @return true if the node is a voter in current, or (if joint) in incoming
+     */
+    public boolean contains(NodeId id) {
+        return current.contains(id) || (isJoint() && incoming.contains(id));
     }
 }

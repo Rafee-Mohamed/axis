@@ -110,6 +110,10 @@ public class RaftLog {
         this.unstableLog = new UnstableLog(lastStorageIndex);
     }
 
+    // ==================== Getters ====================
+
+    public long committed() { return committed; }
+
     // ==================== Index Queries ====================
 
     /**
@@ -218,26 +222,26 @@ public class RaftLog {
      *   <li>Update committed index to min(leaderCommit, newLastIndex)</li>
      * </ol>
      *
-     * @param prevIndex index of entry immediately preceding new entries
      * @param prevTerm term of entry at prevIndex
+     * @param prevIndex index of entry immediately preceding new entries
      * @param entries new entries to append (may be empty for heartbeat)
      * @param leaderCommitIndex leader's committed index
      * @return new lastIndex if successful, empty if log doesn't match
      * @throws IllegalStateException if conflict with already committed entry
      */
-    public OptionalLong tryAppend(long prevIndex, long prevTerm, List<Entry> entries, long leaderCommitIndex) throws StorageException, IllegalArgumentException {
+    public OptionalLong tryAppend(long prevTerm, long prevIndex, List<Entry> entries, long leaderCommitIndex) throws StorageException, IllegalStateException {
         if (!matchTerm(prevTerm, prevIndex))
             return OptionalLong.empty();
 
         var newLastIndex = prevIndex + entries.size();
         var conflictIndex = findConflictIndex(entries);
 
-        if (conflictIndex != 0 && conflictIndex <= committed) {
+        if (conflictIndex.isPresent() && conflictIndex.getAsLong() <= committed) {
             throw new IllegalStateException(
                 "entry " + conflictIndex + " conflicts with committed entry [committed=" + committed + "]");
-        } else if (conflictIndex != 0) {
+        } else if (conflictIndex.isPresent()) {
             var offset = prevIndex + 1;
-            var nonConflictingEntries = (int) (conflictIndex - offset);
+            var nonConflictingEntries = (int) (conflictIndex.getAsLong() - offset);
             if (nonConflictingEntries > entries.size()) {
                 throw new IllegalStateException(
                     "conflict index " + conflictIndex + " out of range, offset=" + offset + ", entries.size=" + entries.size());
@@ -277,16 +281,16 @@ public class RaftLog {
      * or if the index doesn't exist in our log.
      *
      * @param entries entries to check against our log
-     * @return conflict index, or 0 if all entries match
+     * @return conflict index if present
      */
-    public long findConflictIndex(List<Entry> entries) {
+    public OptionalLong findConflictIndex(List<Entry> entries) {
         for (var entry: entries) {
             if (!matchTerm(entry.term(), entry.index())) {
-                return entry.index();
+                return OptionalLong.of(entry.index());
             }
         }
 
-        return 0;
+        return OptionalLong.empty();
     }
 
     /**
@@ -483,6 +487,15 @@ public class RaftLog {
             }
             committed = commitIndex;
         }
+    }
+
+
+    public boolean tryCommit(long term, long index) throws StorageException {
+        if (index > committed && matchTerm(term, index)) {
+            commitTo(index);
+            return true;
+        }
+        return false;
     }
 
     /**

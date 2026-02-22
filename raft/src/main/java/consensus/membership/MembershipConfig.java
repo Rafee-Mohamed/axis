@@ -1,5 +1,6 @@
 package consensus.membership;
 
+import consensus.algorithm.Leader;
 import consensus.node.NodeId;
 
 import java.util.HashSet;
@@ -10,7 +11,7 @@ public record MembershipConfig(
         JointConfig voters,
         Set<NodeId> learners,
         Set<NodeId> nextLearners,
-        boolean autoLeave
+        MembershipTransition transition
 ) {
 
     public static MembershipConfig empty() {
@@ -18,7 +19,7 @@ public record MembershipConfig(
                 new JointConfig(new MajorityConfig(Set.of()), null),
                 Set.of(),
                 Set.of(),
-                false
+                MembershipTransition.JOINT_AUTO
         );
     }
 
@@ -27,7 +28,7 @@ public record MembershipConfig(
                 new JointConfig(new MajorityConfig(voters), null),
                 Set.of(),
                 Set.of(),
-                false
+                MembershipTransition.JOINT_AUTO
         );
     }
 
@@ -41,8 +42,8 @@ public record MembershipConfig(
     /**
      * Committed index (delegates to JointConfig).
      */
-    public long committedIndex(Map<NodeId, Long> matchIndices) {
-        return voters.committedIndex(matchIndices);
+    public long committedIndex(MatchIndexer indexer) {
+        return voters.committedIndex(indexer);
     }
 
     /**
@@ -59,5 +60,25 @@ public record MembershipConfig(
         var targets = new HashSet<>(voters.allVoters());
         targets.addAll(learners);
         return targets;
+    }
+
+    /**
+     * Checks if a node is a member of the cluster — either a voter (in any
+     * config during joint consensus) or a learner.
+     *
+     * <p>Does NOT check {@code nextLearners}. By invariant, any node in
+     * nextLearners is guaranteed to also be in the outgoing voter set
+     * (the {@code current} config during joint consensus), so
+     * {@code voters.contains(id)} will find it.</p>
+     *
+     * @param id the node to check
+     * @return true if the node is a voter or learner in this configuration
+     */
+    public boolean isMember(NodeId id) {
+        return voters.contains(id) || learners.contains(id);
+    }
+
+    public boolean isLearner(NodeId transferee) {
+        return learners.contains(transferee);
     }
 }

@@ -5,37 +5,43 @@ import consensus.node.NodeId;
 import java.util.Optional;
 
 public final class Follower implements Role {
-    private Optional<NodeId> leaderId;
-    private int electionElapsed;
-    private int electionTimeout;
-    private int randomizedElectionTimeout;
+    private Optional<NodeId> leader;
+    private final int electionTimeout; // base (non-randomized) timeout for lease checks
+    private final TickTimer electionTimer;
 
     public Follower(NodeId leaderId) {
-        this.leaderId = Optional.ofNullable(leaderId);
-        electionElapsed = 0;
+        this.leader = Optional.ofNullable(leaderId);
+        this.electionTimer = new TickTimer(10);
+        this.electionTimeout = 0;
     }
 
-    public void tick() {
-        electionElapsed++;
+
+    public void resetElectionTimer() {
+       electionTimer.reset();
     }
 
     public boolean canStartElectionAfterTick() {
-        electionElapsed++;
+        return electionTimer.resetIfTimedOutAfterTick();
+    }
 
-        var canStartElection = electionElapsed >= randomizedElectionTimeout;
-
-        if (canStartElection)
-            electionElapsed = 0;
-
-        return canStartElection;
+    public boolean isElectionTimedOut() {
+        return electionTimer.isTimedOut(electionTimeout);
     }
 
     public boolean hasLeader() {
-        return leaderId.isPresent();
+        return leader.isPresent();
+    }
+
+    public void setLeader(NodeId id) {
+        leader = Optional.ofNullable(id);
     }
 
     public void voteGranted() {
-        leaderId = Optional.empty();
-        electionElapsed = 0;
+        leader = Optional.empty();
+        electionTimer.reset();
+    }
+
+    public NodeId leaderId() {
+        return leader.get();
     }
 }

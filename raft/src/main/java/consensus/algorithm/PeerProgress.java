@@ -45,8 +45,8 @@ package consensus.algorithm;
  * │            │ needs snapshot           │ needs snapshot                          │
  * │            ▼                          ▼                                         │
  * │       ┌──────────────────────────────────────┐                                  │
- * │       │              SNAPSHOT                 │                                 │
- * │       │  (waiting for snapshot to complete)   │ ──── done ────► PROBE           │
+ * │       │              SNAPSHOT                │                                  │
+ * │       │  (waiting for snapshot to complete)  │ ──── done ────► PROBE            │
  * │       └──────────────────────────────────────┘                                  │
  * │                                                                                 │
  * │  PROBE:     Finding match point. Send one entry, wait for response.             │
@@ -131,6 +131,9 @@ public class PeerProgress {
     
     /** Returns the next index to send. */
     public long next() { return next; }
+
+    /** Returns replication state of this peer */
+    public ReplicationState state() { return state; }
     
     /** Returns the last commit index sent to follower. */
     public long sentCommit() { return sentCommit; }
@@ -147,6 +150,8 @@ public class PeerProgress {
     /** Marks this peer as a learner. */
     public void becomeLearner() { roleType = RoleType.LEARNER; }
 
+
+
     /**
      * Returns whether sending log entries to this follower is paused.
      * This happens when:
@@ -158,6 +163,14 @@ public class PeerProgress {
      */
     public boolean isPaused() {
         return state.isPaused();
+    }
+
+    public boolean probing() {
+        return state instanceof ReplicationState.Probe || state instanceof ReplicationState.ProbePaused;
+    }
+
+    public boolean replicating() {
+        return state instanceof ReplicationState.Replicate || state instanceof ReplicationState.ReplicatePaused;
     }
 
     /* ==================== STATE TRANSITIONS ==================== */
@@ -185,7 +198,7 @@ public class PeerProgress {
             next = match + 1;
         }
 
-        state = switch (state){
+        state = switch (state) {
             case ReplicationState.Probe p -> p;
             case ReplicationState.ProbePaused pp -> pp.resume();
             case ReplicationState.Replicate r -> r.toProbe();
@@ -245,6 +258,35 @@ public class PeerProgress {
         
         next = snapshotIndex + 1;
         sentCommit = snapshotIndex;
+    }
+
+    /**
+     * Handles a failed snapshot delivery by resetting progress to Probe.
+     *
+     * <p>Unlike {@link #becomeProbe()} called from Snapshot state (which
+     * probes from {@code snapshotIndex + 1} because the snapshot was applied),
+     * this method probes from {@code match + 1} — the snapshot was never
+     * applied, so we go back to the last confirmed match point.</p>
+     *
+     * <p>Example (snapshot at index 100, match at 5):</p>
+     * <pre>
+     *   Before: state=Snapshot(100), match=5, next=101
+     *   After:  state=Probe,         match=5, next=6
+     *
+     *   vs becomeProbe() from Snapshot (success):
+     *   After:  state=Probe,         match=5, next=101
+     * </pre>
+     *
+     * @throws IllegalStateException if not in Snapshot state
+     */
+    public void snapshotFailed() {
+        if (state instanceof ReplicationState.Snapshot s) {
+            next = match + 1;
+            sentCommit = Math.min(sentCommit, next - 1);
+            state = s.toProbe();
+            return;
+        }
+        throw new IllegalStateException("Snapshot failure can happen only in ReplicationState.Snapshot but happened in " + state);
     }
 
     /* ==================== SENDING ==================== */
@@ -331,6 +373,26 @@ public class PeerProgress {
     }
 
     /**
+     * Pauses sending if currently in an active (unpaused) state.
+     * Probe → ProbePaused, Replicate → ReplicatePaused.
+     * Already-paused and Snapshot states are unaffected.
+     *
+     * <p>Used after snapshot status handling to prevent the leader from
+     * immediately sending AppendEntries — on success, we wait for the
+     * peer's AppendEntriesResponse; on failure, we wait for the next
+     * heartbeat cycle before retrying.</p>
+     *
+     * @see #resumeStateIfPaused()
+     */
+    public void pauseStateIfResumed() {
+        state = switch (state) {
+            case ReplicationState.Replicate r -> r.pause();
+            case ReplicationState.Probe p -> p.pause();
+            default -> state;
+        };
+    }
+
+    /**
      * Called when an AppendEntries was accepted. Updates match and frees
      * acknowledged messages from inflights.
      *
@@ -392,10 +454,10 @@ public class PeerProgress {
      *   After:  unchanged
      *
      * @param rejectedIndex    the index that was rejected by the follower
-     * @param lastMatchedIndex the hint from follower about its last matched index
+     * @param matchIndexHint the hint from follower about its last matched index
      * @return true if next was decremented, false if stale rejection
      */
-    public boolean tryDecrementTo(long rejectedIndex, long lastMatchedIndex) {
+    public boolean tryDecrementTo(long rejectedIndex, long matchIndexHint) {
         if (state instanceof ReplicationState.Replicate || state instanceof ReplicationState.ReplicatePaused) {
             if (rejectedIndex <= match) {
                 return false;
@@ -410,10 +472,17 @@ public class PeerProgress {
             return false;
         }
 
-        next = Math.max(Math.min(rejectedIndex, lastMatchedIndex + 1), match + 1);
+        next = Math.max(Math.min(rejectedIndex, matchIndexHint + 1), match + 1);
         sentCommit = Math.min(sentCommit, next - 1);
         resumeStateIfPaused();
         return true;
     }
 
+    public boolean canReplicateMessages() {
+        return switch (state) {
+            case ReplicationState.Replicate(var inflight)-> !inflight.isFull();
+            case ReplicationState.Probe p -> true;
+            default -> false;
+        };
+    }
 }
