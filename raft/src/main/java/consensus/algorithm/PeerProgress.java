@@ -1,5 +1,7 @@
 package consensus.algorithm;
 
+import consensus.config.PeerInflightConfig;
+
 /**
  * Tracks replication progress from leader to a single follower.
  * 
@@ -107,18 +109,18 @@ public class PeerProgress {
     private boolean active;
     
     /** Configuration for creating Inflight instances when entering Replicate state. */
-    private final Inflight.Config inflightConfig;
+    private final PeerInflightConfig inflightConfig;
     
     /**
      * Creates a new PeerProgress.
      *
      * @param inflightConfig configuration for flow control (max messages, max bytes)
      */
-    public PeerProgress(Inflight.Config inflightConfig, RoleType roleType) {
+    public PeerProgress(PeerInflightConfig inflightConfig, RoleType roleType) {
         this(inflightConfig, roleType, 1);
     }
 
-    public PeerProgress(Inflight.Config inflightConfig, RoleType roleType, long nextIndex) {
+    public PeerProgress(PeerInflightConfig inflightConfig, RoleType roleType, long nextIndex) {
         this.inflightConfig = inflightConfig;
         this.roleType = roleType;
         this.state = new ReplicationState.Probe();

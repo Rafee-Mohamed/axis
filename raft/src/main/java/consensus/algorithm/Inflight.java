@@ -1,5 +1,7 @@
 package consensus.algorithm;
 
+import consensus.config.PeerInflightConfig;
+
 import java.util.ArrayDeque;
 import java.util.Queue;
 
@@ -60,14 +62,6 @@ public class Inflight {
      */
     public record Entry(long index, long bytes) {}
     
-    /**
-     * Configuration for flow control limits.
-     * 
-     * @param maxInflightMessages maximum number of unacknowledged messages
-     * @param maxInflightBytes    maximum total bytes in flight (use Long.MAX_VALUE for unlimited)
-     */
-    public record Config(int maxInflightMessages, long maxInflightBytes) {}
-
     /** Total bytes currently in flight. */
     private long inflightBytes;
     
@@ -75,14 +69,14 @@ public class Inflight {
     private final Queue<Entry> entries;
 
     /** Flow control configuration. */
-    private final Config config;
+    private final PeerInflightConfig config;
     
     /**
      * Creates a new Inflight tracker with the given configuration.
      *
      * @param config flow control limits
      */
-    public Inflight(Config config) {
+    public Inflight(PeerInflightConfig config) {
         this.config = config;
         this.inflightBytes = 0;
         this.entries = new ArrayDeque<>();
@@ -137,7 +131,7 @@ public class Inflight {
      * @return true if at capacity
      */
     public boolean isFull() {
-        return entries.size() >= config.maxInflightMessages() || inflightBytes >= config.maxInflightBytes();
+        return entries.size() >= config.maxInflightMsgs() || inflightBytes >= config.maxInflightBytes();
     }
 
     /**

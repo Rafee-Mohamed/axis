@@ -1,6 +1,6 @@
 package consensus.algorithm;
 
 public enum ProposalHandleMode {
-    FORWARD,
+    FORWARD_TO_LEADER,
     DROP
 }

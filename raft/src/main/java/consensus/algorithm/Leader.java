@@ -1,5 +1,6 @@
 package consensus.algorithm;
 
+import consensus.config.LeaderConfig;
 import consensus.membership.MembershipConfig;
 import consensus.message.Message;
 import consensus.node.NodeId;
@@ -16,13 +17,11 @@ public final class Leader implements Role {
     private Set<NodeId> peers;
     private final Function<NodeId, OptionalLong> matchIndexer;
     private long uncommittedSize;
-    private final long maxUncommittedSize;
     private Optional<NodeId> transferTarget;
     private long membershipChangeIndex;
-    private final boolean checkQuorum;
     private final TickTimer quorumCheckTimer;
     private final TickTimer heartbeatTimer;
-    private final Inflight.Config inflightConfig;
+    private final LeaderConfig config;
     /**
      * Tracks pending linearizable read requests and heartbeat sequence acks.
      * Created fresh with each leader election (no state carries over from
@@ -47,11 +46,12 @@ public final class Leader implements Role {
      */
     private List<Message.ReadIndex> deferredReadIndexMessages;
 
-    public Leader(NodeId leaderId, Set<NodeId> peers, long lastIndex, Inflight.Config inflightConfig) {
+    public Leader(NodeId leaderId, Set<NodeId> peers, long lastIndex, LeaderConfig leaderConfig) {
         id = leaderId;
-        peerProgress = peers.stream().collect(Collectors.toMap((id) -> id, (_) -> new PeerProgress(inflightConfig, RoleType.VOTER)));
+        config = leaderConfig;
+        peerProgress = peers.stream().collect(Collectors.toMap((id) -> id, (_) -> new PeerProgress(config, RoleType.VOTER)));
         // Leader's own progress starts in Replicate state and is always active.
-        var leaderProgress = peerProgress.computeIfAbsent(leaderId, (_) -> new PeerProgress(inflightConfig, RoleType.VOTER));
+        var leaderProgress = peerProgress.computeIfAbsent(leaderId, (_) -> new PeerProgress(config, RoleType.VOTER));
         leaderProgress.becomeReplicate();
         leaderProgress.setActive(true);
         // Pre-compute the set of peers excluding ourselves for broadcast loops.
@@ -63,11 +63,8 @@ public final class Leader implements Role {
         transferTarget = Optional.empty();
         membershipChangeIndex = lastIndex;
         uncommittedSize = 0;
-        maxUncommittedSize = 0;
-        checkQuorum = false;
-        quorumCheckTimer = new TickTimer(10);
-        heartbeatTimer = new TickTimer(10);
-        this.inflightConfig = inflightConfig;
+        quorumCheckTimer = new TickTimer(config.electionTimeout());
+        heartbeatTimer = new TickTimer(config.heartbeatTimeout());
         readIndex = new ReadIndex();
         deferredReadIndexMessages = new ArrayList<>();
     }
@@ -119,7 +116,7 @@ public final class Leader implements Role {
             var existing = peerProgress.get(member);
             if (existing == null) {
                 var roleType = mc.isVoter(member) ? RoleType.VOTER : RoleType.LEARNER;
-                var newProgress = new PeerProgress(inflightConfig, roleType, lastIndex);
+                var newProgress = new PeerProgress(config, roleType, lastIndex);
                 newPeerProgress.put(member, newProgress);
             } else {
                 if (mc.isLearner(member) && existing.isVoter()) {
@@ -206,7 +203,7 @@ public final class Leader implements Role {
     }
 
     public boolean canCheckQuorumAfterTick() {
-        if (!checkQuorum)
+        if (config.leaderLivenessPolicy() != LeaderLivenessPolicy.QUORUM_VERIFIED)
             return false;
 
         return quorumCheckTimer.resetIfTimedOutAfterTick();
@@ -222,11 +219,15 @@ public final class Leader implements Role {
 
     public boolean tryIncreaseUncommittedSize(List<Entry> entries) {
         var size = Entry.calculateSize(entries);
-        if ((uncommittedSize + size) > maxUncommittedSize)
+        if ((uncommittedSize + size) > config.maxUncommittedSize())
             return false;
 
         uncommittedSize += size;
         return true;
+    }
+
+    public void decreaseUncommittedSize(long size) {
+        uncommittedSize = Math.max(0, uncommittedSize - size);
     }
 
     public Function<NodeId, OptionalLong> matchIndexer() {

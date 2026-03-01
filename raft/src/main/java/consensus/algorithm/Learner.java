@@ -1,16 +1,19 @@
 package consensus.algorithm;
 
+import consensus.config.LearnerConfig;
 import consensus.node.NodeId;
 
 import java.util.Optional;
 
 public final class Learner implements Role {
     private Optional<NodeId> leader;
-    private TickTimer leaseTimer;
+    private final LearnerConfig config;
+    private final TickTimer leaseTimer;
 
-    public Learner(NodeId leaderId) {
-        leader = Optional.ofNullable(leaderId);
-        leaseTimer = new TickTimer(10);
+    public Learner(NodeId leaderId, LearnerConfig config) {
+        this.leader = Optional.ofNullable(leaderId);
+        this.config = config;
+        this.leaseTimer = new TickTimer(config.leaseTimeout());
     }
 
     public boolean hasLeader() {
@@ -22,4 +25,12 @@ public final class Learner implements Role {
     }
 
     public void setLeader(NodeId id) { leader = Optional.ofNullable(id); }
+
+    /**
+     * Clears the known leader, making this node a leaderless learner.
+     * The node remains in its current term.
+     */
+    public void forgetLeader() {
+        leader = Optional.empty();
+    }
 }

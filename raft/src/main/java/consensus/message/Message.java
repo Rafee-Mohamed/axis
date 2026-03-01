@@ -474,4 +474,57 @@ public sealed interface Message {
             NodeId peer
     ) implements Message {
     }
+
+    /**
+     * Local message: instructs a follower/learner to forget its current leader.
+     *
+     * <p>Useful with PreVote + CheckQuorum: followers normally reject pre-votes
+     * if they've recently heard from the leader (vote rejection protects the
+     * leader's lease). ForgetLeader clears that memory so the node can grant
+     * votes immediately, enabling fast leader election when an external system
+     * (e.g., orchestrator) knows the leader is dead.</p>
+     *
+     * <p>Incompatible with lease-based reads — see
+     * {@link consensus.algorithm.Raft} forgetLeader methods for details.</p>
+     */
+    record ForgetLeader() implements Message {}
+
+
+    /**
+     * Local message: log entries, hard state, and/or snapshot have been
+     * persisted to stable storage.
+     *
+     * <p>Entry stability is <b>term-gated</b>: only applied when
+     * {@code term == currentTerm}. If the term changed, the entries may
+     * have been overwritten by a new leader (ABA problem). Snapshot
+     * application is <b>not term-gated</b> — snapshots are committed
+     * state, immutable across terms.</p>
+     *
+     * @param term     the Raft term when the persist was requested
+     * @param logIndex last persisted entry index (0 if no entries)
+     * @param logTerm  term of the last persisted entry
+     * @param snapshot the persisted snapshot, if any
+     */
+    record LogPersisted(
+            long term,
+            long logIndex,
+            long logTerm,
+            Optional<Snapshot> snapshot
+    ) implements Message {}
+
+    /**
+     * Local message: committed entries have been applied to the state machine.
+     *
+     * <p>Entries are echoed back so Raft can extract the last applied index
+     * and total size. No term field — committed entries are term-independent,
+     * permanent regardless of leadership changes.</p>
+     *
+     * @param entries the committed entries that were applied (echoed back)
+     */
+    record AppliedToStateMachine(
+            List<Entry> entries
+    ) implements Message {
+    }
+
+
 }
