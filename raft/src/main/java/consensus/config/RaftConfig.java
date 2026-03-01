@@ -22,7 +22,7 @@ public record RaftConfig(
         long maxUncommittedSize,
         int maxInflightMsgs,
         long maxInflightBytes
-) implements LeaderConfig, FollowerConfig, LearnerConfig {
+) implements LeaderConfig, FollowerConfig, CandidateConfig, LearnerConfig {
 
     public RaftConfig {
         if (heartbeatTimeout <= 0) {
@@ -42,6 +42,11 @@ public record RaftConfig(
             throw new IllegalArgumentException(
                     "leaderLivenessPolicy must be QUORUM_VERIFIED when readIndexMode is LEASE");
         }
+    }
+
+    @Override
+    public int electionRoundTimeout() {
+        return electionTimeout;
     }
 
     @Override

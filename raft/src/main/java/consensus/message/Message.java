@@ -195,17 +195,25 @@ public sealed interface Message {
      * <p>The {@code cause} field distinguishes <b>why</b> this election is happening,
      * which affects how voters handle the <b>leader lease check</b>:</p>
      * <ul>
-     *   <li>{@link ElectionCause#TIMEOUT TIMEOUT} — normal election triggered by a
-     *       follower's election timer expiring. Voters that have recently heard from
-     *       a leader (within their election timeout) will <em>reject</em> this vote
-     *       to protect the active leader from disruption. This is the lease check
-     *       that prevents partitioned nodes from disrupting the cluster.</li>
+     *   <li>{@link ElectionCause#ELECTION_TIMEOUT ELECTION_TIMEOUT} — normal election
+     *       triggered by a follower's election timer expiring. Voters that have
+     *       recently heard from a leader (within their election timeout) will
+     *       <em>reject</em> this vote to protect the active leader from disruption.
+     *       This is the lease check that prevents partitioned nodes from disrupting
+     *       the cluster.</li>
      *   <li>{@link ElectionCause#LEADER_TRANSFER LEADER_TRANSFER} — election triggered
      *       by a {@link TimeoutNow} from the current leader as part of a graceful
      *       leadership transfer. Voters <em>bypass</em> the lease check and evaluate
      *       the vote purely on term and log freshness. This is safe because the leader
      *       itself initiated the transfer — it wants to give up leadership, so the
      *       lease should not block the handoff.</li>
+     *   <li>{@link ElectionCause#WON_PREELECTION WON_PREELECTION} — real election
+     *       after winning a pre-vote round. Voters apply the same lease check as
+     *       {@code ELECTION_TIMEOUT}.</li>
+     *   <li>{@link ElectionCause#ELECTION_ROUND_TIMEOUT ELECTION_ROUND_TIMEOUT} —
+     *       election restarted because a Candidate's round timer expired without
+     *       a decisive result. Voters apply the same lease check as
+     *       {@code ELECTION_TIMEOUT}.</li>
      * </ul>
      *
      * @param to           the voter being asked

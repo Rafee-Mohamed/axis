@@ -91,13 +91,13 @@ public class Raft {
      * @return the newly created PreCandidate role instance
      */
     private PreCandidate becomePreCandidate() {
-        if (role instanceof Leader || role instanceof PreCandidate)
+        if (role instanceof Leader)
             throw new IllegalStateException("Cannot transition from " + role + " to PreCandidate role");
 
         if (config.electionProtocol() != ElectionProtocol.DUAL_ELECTION)
             throw new IllegalStateException("Cannot transition to PreCandidate role in " + config.electionProtocol() + " election mode");
 
-        var preCandidate = new PreCandidate();
+        var preCandidate = new PreCandidate(config);
         role = preCandidate;
         return preCandidate;
     }
@@ -113,12 +113,12 @@ public class Raft {
      * @return the newly created Candidate role instance
      */
     private Candidate becomeCandidate() {
-        if (role instanceof Leader || role instanceof Candidate)
+        if (role instanceof Leader)
             throw new IllegalStateException("Cannot transition from " + role + " to Candidate role");
 
         term = term + 1;
         votedFor = Optional.of(id);
-        var candidate = new Candidate();
+        var candidate = new Candidate(config);
         role = candidate;
         return candidate;
     }
@@ -381,21 +381,87 @@ public class Raft {
         }
     }
 
-    private void handleTick(Candidate c) {
-
+    /**
+     * Handles a tick for the PreCandidate role. Same election round timer
+     * logic as {@link #handleTick(Candidate)} — if the pre-vote round
+     * stalls, the node retries with a fresh pre-election and new randomized
+     * timeout.
+     */
+    private void handleTick(PreCandidate pc) throws StorageException {
+        if (pc.electionRoundTimedOutAfterTick()) {
+            step(new Message.TriggerElection(id));
+        }
     }
 
+    /**
+     * Handles a tick for the Candidate role. A Candidate runs a single
+     * timer — the election round timer — which bounds how long a real
+     * election round can take before giving up and retrying.
+     *
+     * <p>If the round timer expires without receiving votes from a majority
+     * (split vote, network partition, or unresponsive peers), the node
+     * restarts the election with a fresh term increment and new randomized
+     * timeout. The randomization across nodes ensures that repeated split
+     * votes eventually resolve as one candidate's timer fires first.</p>
+     *
+     * <p>The retry is dispatched as a {@link Message.TriggerElection} through
+     * {@code step()}, which calls {@code candidateElection()} with
+     * {@link ElectionCause#ELECTION_ROUND_TIMEOUT} — incrementing the term,
+     * recording a self-vote, and broadcasting {@code RequestVote} to all
+     * voters.</p>
+     */
+    private void handleTick(Candidate c) throws StorageException {
+        if (c.electionRoundTimedOutAfterTick()) {
+            step(new Message.TriggerElection(id));
+        }
+    }
+
+    /**
+     * Handles a tick for the Follower role. A Follower runs a single timer —
+     * the election timer — which detects leader failure and triggers a new
+     * election.
+     *
+     * <p>Two conditions must be met before starting an election:</p>
+     * <ol>
+     *   <li><b>Eligible to participate:</b> the node must be a voting member
+     *       of the current configuration (learners and non-members cannot
+     *       start elections).</li>
+     *   <li><b>Election timer expired:</b> the leader has not been heard from
+     *       within the randomized election timeout, indicating it may have
+     *       failed or become partitioned.</li>
+     * </ol>
+     *
+     * <p>If both conditions hold, a {@link Message.TriggerElection} is
+     * dispatched through {@code step()}, which initiates either a pre-vote
+     * or a real election depending on the configured
+     * {@link ElectionProtocol}.</p>
+     */
     private void handleTick(Follower f) throws StorageException {
         if (canParticipateInElection(f) && f.canStartElectionAfterTick()) {
             step(new Message.TriggerElection(id));
         }
     }
 
+    /**
+     * Handles a tick for the Learner role. A Learner runs a single timer —
+     * the lease timer — which tracks whether the known leader is still
+     * alive.
+     *
+     * <p>Learners do not participate in elections and cannot start one, but
+     * they still need to detect leader failure. If the lease timer expires
+     * (no leader contact within the lease timeout), the learner forgets its
+     * current leader. This ensures the learner does not indefinitely report
+     * a stale leader to the application layer.</p>
+     *
+     * <p>The lease is renewed whenever the learner receives a message from
+     * the leader (AppendEntries, heartbeat, snapshot). Unlike voters, a
+     * learner takes no further action after forgetting the leader — it
+     * simply waits for a new leader to contact it.</p>
+     */
     private void handleTick(Learner l) {
-    }
-
-    private void handleTick(PreCandidate pc) {
-
+        if (l.leaseExpiredAfterTick()) {
+            l.forgetLeader();
+        }
     }
 
     // ────────────────────── MESSAGE HANDLING PER ROLE ──────────────────────
@@ -453,6 +519,7 @@ public class Raft {
 
     private void handleMessage(Candidate c, Message m) throws StorageException {
         switch (m) {
+            case Message.TriggerElection(_) -> candidateElection(ElectionCause.ELECTION_ROUND_TIMEOUT);
             case Message.RequestPreVote preVote -> rejectPreVote(preVote);
             case Message.RequestPreVoteResponse _ -> {
                 // Stale: this node was a PreCandidate that already won the
@@ -502,6 +569,7 @@ public class Raft {
 
     private void handleMessage(PreCandidate pc, Message m) throws StorageException {
         switch (m) {
+            case Message.TriggerElection(_) -> preCandidateElection();
             case Message.RequestPreVote preVote -> rejectPreVote(preVote);
             case Message.RequestPreVoteResponse res -> handlePreVoteResponse(pc, res);
             case Message.RequestVote voteReq -> handleHigherTermVoteReq(voteReq);
@@ -741,7 +809,7 @@ public class Raft {
         if (config.electionProtocol() == ElectionProtocol.DUAL_ELECTION) {
             preCandidateElection();
         } else {
-            candidateElection(ElectionCause.TIMEOUT);
+            candidateElection(ElectionCause.ELECTION_TIMEOUT);
         }
     }
 
@@ -781,7 +849,7 @@ public class Raft {
      * <p>The {@code cause} is embedded in every {@code RequestVote}
      * message, allowing recipients to distinguish between:</p>
      * <ul>
-     *   <li>{@link ElectionCause#TIMEOUT} — normal election after timeout;
+     *   <li>{@link ElectionCause#ELECTION_TIMEOUT} — normal election after timeout;
      *       voters with an active leader lease will reject</li>
      *   <li>{@link ElectionCause#LEADER_TRANSFER} — leadership transfer;
      *       voters bypass the leader lease check (the current leader
@@ -1173,7 +1241,7 @@ public class Raft {
             return;
         }
         c.recordVote(res.from(), res.voteGranted());
-        var result = membership.voteResult(c.getVotes());
+        var result = membership.voteResult(c.voteQuery());
         switch (result) {
             // Append a no-op entry so the leader can commit entries from prior terms.
             case VoteResult.WON -> appendPlaceholderEntry(becomeLeader());

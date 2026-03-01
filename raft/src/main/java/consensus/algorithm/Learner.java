@@ -24,7 +24,12 @@ public final class Learner implements Role {
         return leader.get();
     }
 
-    public void setLeader(NodeId id) { leader = Optional.ofNullable(id); }
+    public void setLeader(NodeId id) {
+        leader = Optional.ofNullable(id);
+        if (leader.isPresent()) {
+            renewLease();
+        }
+    }
 
     /**
      * Clears the known leader, making this node a leaderless learner.
@@ -32,5 +37,13 @@ public final class Learner implements Role {
      */
     public void forgetLeader() {
         leader = Optional.empty();
+    }
+
+    public boolean leaseExpiredAfterTick() {
+        return leaseTimer.resetIfTimedOutAfterTick();
+    }
+
+    public void renewLease() {
+        leaseTimer.reset();
     }
 }

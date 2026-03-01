@@ -1,5 +1,6 @@
 package consensus.algorithm;
 
+import consensus.config.CandidateConfig;
 import consensus.node.NodeId;
 
 import java.util.*;
@@ -9,10 +10,12 @@ public final class Candidate implements Role {
 
     private final Map<NodeId, Boolean> votes;
     private final Function<NodeId, Optional<Boolean>> voteQuery;
+    private final TickTimer electionRoundTimer;
 
-    public Candidate() {
+    public Candidate(CandidateConfig config) {
         votes = new HashMap<>();
         voteQuery = id -> Optional.ofNullable(votes.getOrDefault(id, null));
+        electionRoundTimer = new TickTimer(config.electionRoundTimeout());
     }
 
     public boolean recordVote(NodeId voter, boolean granted) {
@@ -24,11 +27,12 @@ public final class Candidate implements Role {
         return true;
     }
 
-    public void tallyVotes() {
 
+    public boolean electionRoundTimedOutAfterTick() {
+        return electionRoundTimer.resetIfTimedOutAfterTick();
     }
 
-    public Function<NodeId, Optional<Boolean>> getVotes() {
+    public Function<NodeId, Optional<Boolean>> voteQuery() {
         return voteQuery;
     }
 }

@@ -13,7 +13,7 @@ package consensus.algorithm;
  *   Follower election timeout fires
  *         │
  *         ▼
- *   cause = TIMEOUT
+ *   cause = ELECTION_TIMEOUT
  *   RequestVote sent to all voters
  *         │
  *         ▼
@@ -44,7 +44,7 @@ public enum ElectionCause {
      * from disruption. This is the lease check that prevents partitioned or
      * removed nodes from disrupting a healthy cluster.</p>
      */
-    TIMEOUT,
+    ELECTION_TIMEOUT,
 
     /**
      * Election triggered by a {@code TimeoutNow} message from the current
@@ -61,5 +61,26 @@ public enum ElectionCause {
      * disruptive failed election.</p>
      */
     LEADER_TRANSFER,
-    WON_PREELECTION
+
+    /**
+     * Election triggered after winning a pre-vote round.
+     *
+     * <p>The node already confirmed a majority is willing to support it in a
+     * real election. This cause proceeds directly to {@code RequestVote}
+     * (never another pre-vote). Voters apply the same lease check as
+     * {@link #ELECTION_TIMEOUT} — the pre-vote win does not bypass it.</p>
+     */
+    WON_PREELECTION,
+
+    /**
+     * Election re-triggered because a Candidate or PreCandidate's election
+     * round timer expired without reaching a decisive vote result.
+     *
+     * <p>This happens when a split vote or network partition prevents a
+     * majority decision within the randomized election round timeout. The
+     * node restarts the election with a fresh round (and fresh randomized
+     * timeout) to break the livelock. Voters apply the same lease check as
+     * {@link #ELECTION_TIMEOUT}.</p>
+     */
+    ELECTION_ROUND_TIMEOUT
 }
