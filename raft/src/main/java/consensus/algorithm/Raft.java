@@ -8,6 +8,7 @@ import consensus.storage.*;
 
 import java.util.*;
 import java.util.function.Function;
+import java.util.random.RandomGenerator;
 
 public class Raft {
     private final NodeId id;
@@ -21,19 +22,28 @@ public class Raft {
     // Role - Leader, Follower, Learner, Candidate, PreCandidate
     private Role role;
 
+    private final RandomGenerator random;
+
     // Output buffers
     private final List<Message> messages;
     private final List<Message> messagesAfterAppend;
     private final List<Notification> notifications;
     private final List<ReadState> readStates;
 
-    public Raft(RaftState state, RaftConfig raftConfig, RaftLog raftLog, MembershipConfig membershipConfig) {
+    public Raft(
+            RaftState state,
+            RaftConfig raftConfig,
+            RaftLog raftLog,
+            MembershipConfig membershipConfig,
+            RandomGenerator randomGenerator
+    ) {
         id = state.id();
         term = state.term();
         votedFor = state.votedFor();
         config = raftConfig;
         log = raftLog;
         membership = membershipConfig;
+        random = randomGenerator;
         messages = new ArrayList<>();
         messagesAfterAppend = new ArrayList<>();
         notifications = new ArrayList<>();
@@ -97,7 +107,7 @@ public class Raft {
         if (config.electionProtocol() != ElectionProtocol.DUAL_ELECTION)
             throw new IllegalStateException("Cannot transition to PreCandidate role in " + config.electionProtocol() + " election mode");
 
-        var preCandidate = new PreCandidate(config);
+        var preCandidate = new PreCandidate(config, random);
         role = preCandidate;
         return preCandidate;
     }
@@ -118,7 +128,7 @@ public class Raft {
 
         term = term + 1;
         votedFor = Optional.of(id);
-        var candidate = new Candidate(config);
+        var candidate = new Candidate(config, random);
         role = candidate;
         return candidate;
     }
@@ -156,7 +166,7 @@ public class Raft {
             f.resetElectionTimer();
             return f;
         }
-        var follower = new Follower(leader, config);
+        var follower = new Follower(leader, config, random);
 
         role = follower;
         return follower;

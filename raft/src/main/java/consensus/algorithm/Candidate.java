@@ -5,6 +5,7 @@ import consensus.node.NodeId;
 
 import java.util.*;
 import java.util.function.Function;
+import java.util.random.RandomGenerator;
 
 public final class Candidate implements Role {
 
@@ -12,10 +13,10 @@ public final class Candidate implements Role {
     private final Function<NodeId, Optional<Boolean>> voteQuery;
     private final TickTimer electionRoundTimer;
 
-    public Candidate(CandidateConfig config) {
+    public Candidate(CandidateConfig config, RandomGenerator random) {
         votes = new HashMap<>();
         voteQuery = id -> Optional.ofNullable(votes.getOrDefault(id, null));
-        electionRoundTimer = new TickTimer(config.electionRoundTimeout());
+        electionRoundTimer = new TickTimer(config.electionRoundTimeout() + random.nextInt(config.electionRoundTimeout()));
     }
 
     public boolean recordVote(NodeId voter, boolean granted) {
