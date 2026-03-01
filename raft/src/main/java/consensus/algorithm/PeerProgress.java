@@ -114,14 +114,18 @@ public class PeerProgress {
      *
      * @param inflightConfig configuration for flow control (max messages, max bytes)
      */
-    public PeerProgress(Inflight.Config inflightConfig) {
+    public PeerProgress(Inflight.Config inflightConfig, RoleType roleType) {
+        this(inflightConfig, roleType, 1);
+    }
+
+    public PeerProgress(Inflight.Config inflightConfig, RoleType roleType, long nextIndex) {
         this.inflightConfig = inflightConfig;
-        this.roleType = RoleType.FOLLOWER;
+        this.roleType = roleType;
         this.state = new ReplicationState.Probe();
-        this.active = false;
+        this.active = true;
         this.match = 0;
         this.sentCommit = 0;
-        this.next = 1;
+        this.next = Math.max(1, nextIndex);
     }
 
     /* ==================== GETTERS ==================== */
@@ -146,9 +150,17 @@ public class PeerProgress {
     
     /** Returns true if this peer is a learner (non-voting member). */
     public boolean isLearner() { return roleType == RoleType.LEARNER; }
+
+    /** Returns true if this peer is a learner (non-voting member). */
+    public boolean isVoter() { return roleType == RoleType.VOTER; }
     
     /** Marks this peer as a learner. */
     public void becomeLearner() { roleType = RoleType.LEARNER; }
+
+
+    public void becomeVoter() {
+        roleType = RoleType.VOTER;
+    }
 
 
 

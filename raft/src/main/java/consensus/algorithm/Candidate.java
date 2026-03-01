@@ -2,17 +2,17 @@ package consensus.algorithm;
 
 import consensus.node.NodeId;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
+import java.util.function.Function;
 
 public final class Candidate implements Role {
 
     private final Map<NodeId, Boolean> votes;
+    private final Function<NodeId, Optional<Boolean>> voteQuery;
 
     public Candidate() {
-        this.votes = new HashMap<>();
+        votes = new HashMap<>();
+        voteQuery = id -> Optional.ofNullable(votes.getOrDefault(id, null));
     }
 
     public boolean recordVote(NodeId voter, boolean granted) {
@@ -28,7 +28,7 @@ public final class Candidate implements Role {
 
     }
 
-    public Map<NodeId, Boolean> getVotes() {
-        return votes;
+    public Function<NodeId, Optional<Boolean>> getVotes() {
+        return voteQuery;
     }
 }

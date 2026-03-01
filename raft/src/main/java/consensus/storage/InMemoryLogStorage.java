@@ -18,15 +18,15 @@ public class InMemoryLogStorage implements LogStorage {
 
     public InMemoryLogStorage() {
         persistentState = new PersistentState(0, 0, null);
-        var membershipConfig = new MembershipConfig(new JointConfig(new MajorityConfig(Set.of()), null), Set.of(), Set.of(), MembershipTransition.JOINT_AUTO);
+        var membershipConfig = new MembershipConfig(new JointConfig(new MajorityConfig(Set.of()), new MajorityConfig(Set.of())), Set.of(), Set.of(), MembershipTransition.JOINT_AUTO);
         snapshot = new Snapshot(0, 0, membershipConfig, new byte[0]);
         entries = new ArrayList<>(1024);
-        entries.add(Entry.placeholder(0, 0));
+        entries.add(new Entry.Placeholder(0, 0));
     }
 
     @Override
     public synchronized InitialState initialState() throws StorageException {
-        return new InitialState(persistentState, snapshot.membershipConfig());
+        return new InitialState(persistentState, snapshot.membership());
     }
 
     public synchronized long offset() {
@@ -161,7 +161,7 @@ public class InMemoryLogStorage implements LogStorage {
 
         snapshot = nextSnapshot;
         entries = new ArrayList<>();
-        entries.add(Entry.placeholder(snapshot.term(), snapshot.index()));
+        entries.add(new Entry.Placeholder(snapshot.term(), snapshot.index()));
     }
 
 
@@ -195,7 +195,7 @@ public class InMemoryLogStorage implements LogStorage {
 
         var entriesAfterCompaction = new ArrayList<Entry>(entries.size() - lastCompactEntryIdx + 1);
 
-        entriesAfterCompaction.add(Entry.placeholder(entries.get(lastCompactEntryIdx).term(), entries.get(lastCompactEntryIdx).index()));
+        entriesAfterCompaction.add(new Entry.Placeholder(entries.get(lastCompactEntryIdx).term(), entries.get(lastCompactEntryIdx).index()));
         entriesAfterCompaction.addAll(entries.subList(lastCompactEntryIdx + 1, entries.size()));
 
         entries = entriesAfterCompaction;

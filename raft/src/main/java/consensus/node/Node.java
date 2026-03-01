@@ -1,7 +1,6 @@
 package consensus.node;
 
 import consensus.algorithm.Raft;
-import consensus.membership.MembershipChangeConfig;
 import consensus.message.Message;
 
 import java.util.concurrent.BlockingQueue;

@@ -14,7 +14,7 @@ package consensus.algorithm;
  * │      ┌─────────── pause() ───────────┐                   │
  * │      │                               ▼                   │
  * │   ┌──────┐                    ┌─────────────┐            │
- * │   │Probe │◄── resume() ──────│ ProbePaused │             │
+ * │   │Probe │◄── resume() ────── │ ProbePaused │            │
  * │   └──────┘                    └─────────────┘            │
  * │      │                               │                   │
  * │      │ toReplicate()                 │ toReplicate()     │

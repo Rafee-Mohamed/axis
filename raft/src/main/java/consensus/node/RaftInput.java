@@ -1,7 +1,6 @@
 package consensus.node;
 
 import consensus.algorithm.Snapshot;
-import consensus.membership.MembershipChangeConfig;
 import consensus.message.Message;
 
 public interface RaftInput {

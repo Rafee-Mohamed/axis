@@ -2,6 +2,7 @@ package consensus.message;
 
 import consensus.algorithm.ElectionCause;
 import consensus.algorithm.Snapshot;
+import consensus.membership.MembershipChanges;
 import consensus.storage.Entry;
 import consensus.node.NodeId;
 import consensus.membership.MembershipTransition;
@@ -127,7 +128,8 @@ public sealed interface Message {
             NodeId to,
             NodeId from,
             long term,
-            long leaderCommit
+            long leaderCommit,
+            long sequence
     ) implements Message {
     }
 
@@ -146,7 +148,8 @@ public sealed interface Message {
     record HeartbeatResponse(
             NodeId to,
             NodeId from,
-            long term
+            long term,
+            long sequence
     ) implements Message {
     }
 
@@ -328,7 +331,7 @@ public sealed interface Message {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // READ-ONLY QUERY MESSAGES
+    // READ QUERY MESSAGES
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
@@ -341,14 +344,11 @@ public sealed interface Message {
      * @param to      the leader
      * @param from    the follower requesting the read
      * @param term    the follower's term
-     * @param context opaque application data echoed back in the response,
-     *                used to match responses to requests
      */
     record ReadIndex(
             NodeId to,
             NodeId from,
-            long term,
-            byte[] context
+            long term
     ) implements Message {
     }
 
@@ -364,14 +364,12 @@ public sealed interface Message {
      * @param term      the leader's term
      * @param readIndex the commit index at the time the leader confirmed its
      *                  leadership — reads at or below this index are safe
-     * @param context   echoed from the original ReadIndex request
      */
     record ReadIndexResponse(
             NodeId to,
             NodeId from,
             long term,
-            long readIndex,
-            byte[] context
+            long readIndex
     ) implements Message {
     }
 
@@ -421,19 +419,17 @@ public sealed interface Message {
      * Internal: application proposes a membership configuration change.
      *
      * @param from       this node's id
-     * @param changes    the membership changes to apply (add/remove voters/learners)
-     * @param transition how to handle the joint consensus leave phase
+     * @param membershipChanges    the membership changes to apply (add/remove voters/learners)
      * @param context    opaque application data carried through the change
      */
     record MembershipChangeProposal(
             NodeId from,
-            List<MembershipChange> changes,
-            MembershipTransition transition,
+            MembershipChanges membershipChanges,
             byte[] context
     ) implements Message {
     }
 
-    record LeaveJoint() implements Message {}
+    record LeaveJointProposal() implements Message {}
 
     /**
      * Internal: leader's check-quorum tick — verify a majority of peers

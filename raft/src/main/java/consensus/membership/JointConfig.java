@@ -2,9 +2,8 @@ package consensus.membership;
 
 import consensus.node.NodeId;
 
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
+import java.util.function.Function;
 
 /**
  * Joint configuration of two phase membership changes.
@@ -21,40 +20,47 @@ public record JointConfig(
         MajorityConfig incoming
 ) {
 
+    public static JointConfig of(Set<NodeId> current, Set<NodeId> incoming) {
+        return new JointConfig(
+                new MajorityConfig(Collections.unmodifiableSet(current)),
+                new MajorityConfig(Collections.unmodifiableSet(incoming))
+        );
+    }
+
     /**
      * Check if we're in joint consensus mode.
      */
     public boolean isJoint() {
-        return incoming != null && !incoming.voters().isEmpty();
+        return !incoming.voters().isEmpty();
     }
 
     /**
-     * Committed index requires majority in BOTH configs during joint consensus.
+     * Requires majority agreement in BOTH configs during joint consensus.
+     * Takes the minimum of both — the value that both quorums have reached.
      */
-    public long committedIndex(MatchIndexer indexer) {
-        var currentCommittedIndex = current.committedIndex(indexer);
+    public long majorityAgreed(Function<NodeId, OptionalLong> indexer) {
+        var currentAgreed = current.majorityAgreed(indexer);
 
         if (!isJoint())
-            return currentCommittedIndex;
+            return currentAgreed;
 
-        var incomingCommittedIndex = incoming.committedIndex(indexer);
-        // Both must agree - take the minimum
-        return Math.min(currentCommittedIndex, incomingCommittedIndex);
+        var incomingAgreed = incoming.majorityAgreed(indexer);
+        return Math.min(currentAgreed, incomingAgreed);
     }
 
 
     /**
      * Calculates Vote result - requires majority in both configs during joint consensus.
-     * @param votes - Map of node votes -> result
+     * @param voteQuery - Map of node votes -> result
      * @return VoteResult
      */
-    public VoteResult voteResult(Map<NodeId, Boolean> votes) {
-        var currentVoteResult = current.voteResult(votes);
+    public VoteResult voteResult(Function<NodeId, Optional<Boolean>> voteQuery) {
+        var currentVoteResult = current.voteResult(voteQuery);
 
         if (!isJoint())
             return currentVoteResult;
 
-        var incomingResult = incoming.voteResult(votes);
+        var incomingResult = incoming.voteResult(voteQuery);
 
         // Won if both won
         if (currentVoteResult == VoteResult.WON && incomingResult == VoteResult.WON)

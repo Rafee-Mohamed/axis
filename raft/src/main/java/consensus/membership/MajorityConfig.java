@@ -2,8 +2,11 @@ package consensus.membership;
 
 import consensus.node.NodeId;
 
+import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -14,26 +17,37 @@ public record MajorityConfig(Set<NodeId> voters) {
 
     /**
      * Calculate the committed index based on match indices.
-     * Returns the highest index that has been replicated to a majority.
+     * Returns the highest value that a majority of voters have reached.
      *
-     * @param indexer indexer that retrieves matchIndex of nodeId (highest replicated index per node)
-     * @return highest committed index on majority of nodes (or 0 if no majority)
+     * <p>General-purpose majority agreement: given a per-voter value (via the
+     * indexer), sorts them and picks the value at the majority position. This
+     * is the highest value where at least {@link #majoritySize()} voters have
+     * that value or higher.</p>
+     *
+     * <p>Used for:</p>
+     * <ul>
+     *   <li>Log commit: indexer returns each voter's match index</li>
+     *   <li>Read index confirmation: indexer returns each voter's acked heartbeat seq</li>
+     * </ul>
+     *
+     * @param indexer retrieves the per-voter value (empty means the voter is absent/unknown)
+     * @return highest value agreed upon by a majority (or 0 if no majority)
      */
-    public long committedIndex(MatchIndexer indexer) {
+    public long majorityAgreed(Function<NodeId, OptionalLong> indexer) {
         if (voters.isEmpty()) {
             return Long.MAX_VALUE;
         }
 
-        long[] committedIndices = voters
+        long[] values = voters
                 .stream()
-                .map(nodeId -> indexer.match(nodeId).orElse(0))
+                .map(nodeId -> indexer.apply(nodeId).orElse(0))
                 .sorted()
                 .mapToLong(Long::longValue)
                 .toArray();
 
-        var requiredMajority = committedIndices.length - majoritySize();
+        var requiredMajority = values.length - majoritySize();
 
-        return committedIndices[requiredMajority];
+        return values[requiredMajority];
     }
 
     /** @return Number of votes needed for majority */
@@ -56,14 +70,15 @@ public record MajorityConfig(Set<NodeId> voters) {
 
     /**
      * Calculates the vote result given a set of votes results for each node
-     * @param votes - Map of node votes -> result
+     * @param voteQuery - Map of node votes -> result
      * @return VoteResult
      */
-    public VoteResult voteResult(Map<NodeId, Boolean> votes) {
-        var majorityVotes = votes.entrySet()
+    public VoteResult voteResult(Function<NodeId, Optional<Boolean>> voteQuery) {
+        var majorityVotes = voters
                 .stream()
-                .filter(entry -> voters.contains(entry.getKey()))
-                .collect(Collectors.groupingBy(Map.Entry::getValue, Collectors.counting()));
+                .filter(id -> voteQuery.apply(id).isPresent())
+                .map(id -> voteQuery.apply(id).orElse(false))
+                .collect(Collectors.groupingBy(vote -> vote, Collectors.counting()));
 
         var majority = majoritySize();
 

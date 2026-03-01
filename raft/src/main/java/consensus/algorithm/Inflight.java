@@ -6,6 +6,7 @@ import java.util.Queue;
 /**
  * Tracks in-flight AppendEntries messages for flow control.
  * 
+ *
  * When a leader sends log entries to a follower, it doesn't wait for each
  * message to be acknowledged before sending the next (pipelining). Inflight
  * limits how many messages can be outstanding to prevent overwhelming slow

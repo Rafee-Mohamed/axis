@@ -17,5 +17,6 @@ public enum MembershipTransition {
     /** Automatically propose the leave-joint entry once the joint entry is committed. */
     JOINT_AUTO,
     /** Application must explicitly propose the leave-joint entry. */
-    JOINT_EXPLICIT
+    JOINT_EXPLICIT,
+    NONE
 }

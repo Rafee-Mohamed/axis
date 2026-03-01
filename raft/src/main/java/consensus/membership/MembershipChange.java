@@ -2,12 +2,8 @@ package consensus.membership;
 
 import consensus.node.NodeId;
 
-enum MembershipChangeType {
-    REMOVE,
-    ADD_VOTER,
-    ADD_LEARNER,
-    // other types to add
-}
+import java.util.Objects;
 
-public record MembershipChange(NodeId id, MembershipChangeType type) {}
+public record MembershipChange(NodeId id, MembershipChangeType type) {
+}
 

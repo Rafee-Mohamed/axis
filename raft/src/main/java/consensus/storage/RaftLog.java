@@ -2,10 +2,9 @@ package consensus.storage;
 
 import consensus.algorithm.Snapshot;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.OptionalLong;
+import java.util.*;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * RaftLog provides a unified view of the Raft log by combining:
@@ -113,6 +112,8 @@ public class RaftLog {
     // ==================== Getters ====================
 
     public long committed() { return committed; }
+
+    public long applied() { return applied; }
 
     // ==================== Index Queries ====================
 
@@ -594,17 +595,38 @@ public class RaftLog {
      * @param low start index (inclusive)
      * @param high end index (exclusive)
      * @param pageSize maximum bytes per page
-     * @param consumer callback for each page of entries
      */
-    public void scan(long low, long high, long pageSize, Consumer<List<Entry>> consumer) throws IllegalArgumentException, StorageException {
+    public Iterator<Entry> iterator(long low, long high, long pageSize) throws IllegalArgumentException, StorageException {
         checkIndexBounds(low, high);
-        while (low < high) {
-            var entries = slice(low, high, pageSize);
-            if (entries.isEmpty())
-                break;
-            consumer.accept(entries);
-            low += entries.size();
-        }
+        return new Iterator<>() {
+            long cursor = low;
+            Iterator<Entry> current = Collections.emptyIterator();
+            @Override
+            public boolean hasNext() {
+                if (cursor > high) {
+                    return false;
+                }
+                if (current.hasNext()) {
+                    return true;
+                }
+
+                var entries = slice(cursor, high, pageSize);
+                if (entries.isEmpty()) {
+                    return false;
+                }
+                cursor += entries.size();
+                current = entries.iterator();
+                return true;
+            }
+
+            @Override
+            public Entry next() {
+                if (!hasNext()) {
+                    throw new NoSuchElementException();
+                }
+                return current.next();
+            }
+        };
     }
 
     // ==================== Internal Helpers ====================

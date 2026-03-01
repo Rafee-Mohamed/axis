@@ -1,49 +1,25 @@
 package consensus.storage;
 
+import consensus.membership.MembershipChanges;
+
 import java.util.List;
-import java.util.stream.Collectors;
 
-public record Entry(
-        Type type,
-        long term,
-        long index,
-        byte[] data
-) {
-    public enum Type {
-        PLACEHOLDER,         // Marker entry (used at snapshot boundary, new leader entry)
-        NORMAL,              // Regular entry with id, data
-        DATA,                //  data entry
-        MEMBERSHIP_CHANGE    // Configuration change entry
-    }
+sealed public interface Entry {
+    long term();
+    long index();
 
-    public record Id(long term, long index){};
+    record Id(long term, long index) {};
+    default long size() { return 0; };
 
-    // Factory methods
-    public static Entry placeholder(long term, long index) {
-        return new Entry(Type.PLACEHOLDER, term, index, null);
-    }
-
-    public static Entry normal(long term, long index, byte[] data) {
-        return new Entry(Type.NORMAL, term, index, data);
-    }
-
-    public static Entry data(byte[] data) { return new Entry(Type.DATA, 0, 0, data); }
-
-    public static Entry membershipChange(long term, long index, byte[] data) {
-        return new Entry(Type.MEMBERSHIP_CHANGE, term, index, data);
-    }
-
-    public static long calculateSize(List<Entry> entries) {
+    static long calculateSize(List<Entry> entries) {
         return entries.stream().mapToLong(Entry::size).sum();
     }
-
-    /**
-     * Estimate the size of an entry - enum type - int (4 bytes), term long (8 bytes), index long (8 bytes), data.length (bytes)
-     * @return number of bytes required for entry
-     */
-    public long size() {
-        return 8 + 8 + 4 + (data == null ? 0 : data.length);
+    record Placeholder(long term, long index) implements Entry {}
+    record Data(long term, long index, byte[] data) implements Entry {
+        @Override
+        public long size() { return data.length; }
     }
+    record MembershipChange(long term, long index, MembershipChanges membershipChanges) implements Entry {}
+    record LeaveJoint(long term, long index) implements Entry {};
 }
-
 

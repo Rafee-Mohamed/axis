@@ -4,28 +4,24 @@ import consensus.node.NodeId;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Function;
 
 public final class PreCandidate implements Role {
-    private final Map<NodeId, Boolean> votes;
-
+    private final Candidate candidate;
     public PreCandidate() {
-        this.votes = new HashMap<>();
+        candidate = new Candidate();
     }
 
     public boolean recordVote(NodeId voter, boolean granted) {
-        if (votes.containsKey(voter)) {
-            return false;
-        }
-
-        votes.put(voter, granted);
-        return true;
+       return candidate.recordVote(voter, granted);
     }
 
     public void tallyVotes() {
 
     }
 
-    public Map<NodeId, Boolean> getVotes() {
-        return votes;
+    public Function<NodeId, Optional<Boolean>> voteQuery() {
+        return candidate.voteQuery();
     }
 }

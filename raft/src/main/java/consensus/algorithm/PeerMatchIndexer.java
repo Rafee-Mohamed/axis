@@ -1,6 +1,5 @@
 package consensus.algorithm;
 
-import consensus.membership.MatchIndexer;
 import consensus.node.NodeId;
 
 import java.util.Map;
