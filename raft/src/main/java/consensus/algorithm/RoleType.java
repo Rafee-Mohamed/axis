@@ -2,5 +2,9 @@ package consensus.algorithm;
 
 public enum RoleType {
     VOTER,
-    LEARNER
+    LEARNER,
+    LEADER,
+    FOLLOWER,
+    PRE_CANDIDATE,
+    CANDIDATE
 }

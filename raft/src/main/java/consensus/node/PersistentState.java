@@ -1,7 +1,9 @@
 package consensus.node;
 
-public record PersistentState(long term, long commit, NodeId votedFor) {
+import java.util.Optional;
+
+public record PersistentState(long term, Optional<NodeId> votedFor) {
     public PersistentState() {
-        this(0, 0, null);
+        this(0, Optional.empty());
     }
 }

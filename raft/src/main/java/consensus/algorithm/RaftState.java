@@ -9,6 +9,5 @@ public record RaftState(
         long term,
         long committedIndex,
         Optional<NodeId> votedFor
-
 ) {
 }

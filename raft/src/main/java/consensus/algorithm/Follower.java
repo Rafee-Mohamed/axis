@@ -17,6 +17,10 @@ public final class Follower implements Role {
         this.electionTimer = new TickTimer(config.electionTimeout() + random.nextInt(config.electionTimeout()));
     }
 
+    public Follower(FollowerConfig config, RandomGenerator random) {
+        this(null, config, random);
+    }
+
 
     public void resetElectionTimer() {
        electionTimer.reset();

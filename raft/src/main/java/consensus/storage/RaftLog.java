@@ -1,6 +1,8 @@
 package consensus.storage;
 
 import consensus.algorithm.Snapshot;
+import consensus.config.RaftConfig;
+import consensus.config.RaftLogConfig;
 
 import java.util.*;
 import java.util.function.Consumer;
@@ -25,7 +27,7 @@ import java.util.function.Function;
  *       .index   │                                         │                         │
  *            firstIndex                                  offset                  lastIndex
  *
- *       │◄─────────────────── LogStorage ──────────────►│◄────── UnstableLog ───────►│
+ *       │◄─────────────────── LogStorage ──────────────►│◄────── Un stableLog ───────►│
  *                           (persisted)                            (in-memory)
  * </pre>
  *
@@ -81,7 +83,7 @@ public class RaftLog {
     private long applied;
 
     // Maximum allowed size of entries being applied (backpressure mechanism)
-    private final long maxApplyingEntriesSize;
+    private final RaftLogConfig config;
 
     // Current size of entries being applied
     private long applyingEntriesSize;
@@ -95,17 +97,17 @@ public class RaftLog {
      * (the index just before firstIndex, which is the snapshot boundary).
      *
      * @param log the persistent log storage
-     * @param maxApplyingEntriesSize maximum bytes of entries that can be in-flight for applying
+     * @param config maximum bytes of entries that can be in-flight for applying
      * @throws StorageException if storage cannot be read
      */
-    public RaftLog(LogStorage log, long maxApplyingEntriesSize) throws StorageException {
+    public RaftLog(LogStorage log, RaftLogConfig config) throws StorageException {
         var lastCompactedIndex = log.firstIndex() - 1;
         var lastStorageIndex = log.lastIndex();
         this.log = log;
         this.committed = lastCompactedIndex;
         this.applying = lastCompactedIndex;
         this.applied = lastCompactedIndex;
-        this.maxApplyingEntriesSize = maxApplyingEntriesSize;
+        this.config = config;
         this.unstableLog = new UnstableLog(lastStorageIndex);
     }
 
@@ -351,6 +353,10 @@ public class RaftLog {
         return unstableLog.nextSnapshot() != null;
     }
 
+    public boolean isSnapshotInProgress() {
+        return unstableLog.snapshotInProgress();
+    }
+
     /**
      * Returns the current snapshot.
      * Checks unstable first (incoming snapshot from leader), then storage.
@@ -362,6 +368,12 @@ public class RaftLog {
         return log.snapshot();
     }
 
+    public Snapshot nextUnstableSnapshot() throws StorageException {
+        return unstableLog.nextSnapshot();
+    }
+
+
+
     /**
      * Returns committed entries that are ready to be applied to state machine.
      * Range: (applying, maxAppliableIndex].
@@ -371,20 +383,19 @@ public class RaftLog {
      * - There's a pending snapshot (must apply snapshot first)
      * - No new entries to apply
      *
-     * @param allowUnstable if true, may return entries not yet persisted
      * @return entries to apply, respecting size limits
      */
-    public List<Entry> nextCommittedEntries(boolean allowUnstable) throws StorageException {
+    public List<Entry> nextCommittedEntries() throws StorageException {
         if (applyingEntriesPaused || hasUnstableSnapshot())
             return List.of();
 
         var low = applying + 1;
-        var high = maxAppliableIndex(allowUnstable);
+        var high = maxAppliableIndex();
 
         if (low >= high)
             return List.of();
 
-        var maxCurrentAllowedSize = maxApplyingEntriesSize - applyingEntriesSize;
+        var maxCurrentAllowedSize = config.maxApplyingEntriesSize() - applyingEntriesSize;
 
         if (maxCurrentAllowedSize <= 0)
             throw new EntrySizeExceededException(maxCurrentAllowedSize);
@@ -520,7 +531,7 @@ public class RaftLog {
             applyingEntriesSize = 0;
         }
 
-        applyingEntriesPaused = applyingEntriesSize >= maxApplyingEntriesSize;
+        applyingEntriesPaused = applyingEntriesSize >= config.maxApplyingEntriesSize();
     }
 
     // ==================== Persistence Acknowledgement ====================
@@ -559,33 +570,46 @@ public class RaftLog {
      *
      * @param index highest index being applied
      * @param entriesSize total size of entries being applied
-     * @param allowUnstable whether unstable entries are allowed
      */
-    public void acceptApplying(long index, long entriesSize, boolean allowUnstable) {
+    public void acceptApplying(long index, long entriesSize) {
         if (committed < index)
             throw new IllegalArgumentException("applying(" + index + ") is out of range [prevApplying(" + applying + " ), committed(" + committed + " )]");
 
         applying = index;
         applyingEntriesSize += entriesSize;
 
-        applyingEntriesPaused = applyingEntriesSize >= maxApplyingEntriesSize || index < maxAppliableIndex(allowUnstable);
+        applyingEntriesPaused = applyingEntriesSize >= config.maxApplyingEntriesSize() || index < maxAppliableIndex();
+    }
+
+    public boolean hasCommittedEntriesToApply() {
+        if (applyingEntriesPaused) {
+            return false;
+        }
+
+        if (hasUnstableSnapshot() || isSnapshotInProgress()) {
+            return false;
+        }
+
+        return applying < maxAppliableIndex();
+
     }
 
     /**
      * Returns the maximum index that can be applied.
-     * Usually equals committed, but if allowUnstable is false,
-     * limited to entries already persisted (unstable.offset - 1).
      *
-     * @param allowUnstable if true, can apply unpersisted entries
+     * <p>With {@link AppliableEntriesPolicy#COMMITTED COMMITTED}, equals
+     * the committed index — entries can be applied even before persistence.
+     * With {@link AppliableEntriesPolicy#PERSISTED_COMMITTED PERSISTED_COMMITTED},
+     * capped at {@code unstable.offset - 1} so only already-persisted entries
+     * within the committed range are eligible.</p>
+     *
      * @return maximum appliable index
      */
-    public long maxAppliableIndex(boolean allowUnstable) {
-        var high = committed;
-
-        if (!allowUnstable)
-            high = Math.min(high, unstableLog.offset() - 1);
-
-        return high;
+    public long maxAppliableIndex() {
+        return switch (config.appliableEntriesPolicy()) {
+            case AppliableEntriesPolicy.PERSISTED_COMMITTED -> Math.min(committed, unstableLog.offset() - 1);
+            case AppliableEntriesPolicy.COMMITTED -> committed;
+        };
     }
 
     /**

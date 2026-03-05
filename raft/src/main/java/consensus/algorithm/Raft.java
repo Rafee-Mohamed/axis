@@ -3,10 +3,14 @@ package consensus.algorithm;
 import consensus.config.RaftConfig;
 import consensus.membership.*;
 import consensus.message.Message;
+import consensus.node.CheckpointState;
 import consensus.node.NodeId;
+import consensus.node.PersistentState;
+import consensus.node.VolatileState;
 import consensus.storage.*;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.random.RandomGenerator;
 
@@ -33,17 +37,18 @@ public class Raft {
     public Raft(
             RaftState state,
             RaftConfig raftConfig,
-            RaftLog raftLog,
+            LogStorage logStorage,
             MembershipConfig membershipConfig,
             RandomGenerator randomGenerator
-    ) {
+    ) throws StorageException {
         id = state.id();
         term = state.term();
         votedFor = state.votedFor();
         config = raftConfig;
-        log = raftLog;
-        membership = membershipConfig;
+        log = new RaftLog(logStorage, config);
         random = randomGenerator;
+        role = new Follower(config, random);
+        membership = membershipConfig;
         messages = new ArrayList<>();
         messagesAfterAppend = new ArrayList<>();
         notifications = new ArrayList<>();
@@ -69,6 +74,64 @@ public class Raft {
             case Learner ln -> handleTick(ln);
             case PreCandidate pc -> handleTick(pc);
         }
+    }
+
+    public NodeId id() {
+        return id;
+    }
+
+    public long term() {
+        return term;
+    }
+
+    public boolean hasOutput() {
+        return !messages.isEmpty() || !messagesAfterAppend.isEmpty() || !readStates.isEmpty();
+    }
+
+    public List<Message> messages() {
+        return Collections.unmodifiableList(messages);
+    }
+
+    public List<Message> messagesAfterAppend() {
+        return Collections.unmodifiableList(messagesAfterAppend);
+    }
+
+    public List<ReadState> readStates() {
+        return Collections.unmodifiableList(readStates);
+    }
+
+    private <T> List<T> drain(List<T> list) {
+        var items = new ArrayList<>(list);
+        list.clear();
+        return items;
+    }
+
+    public List<Message> drainMessages() {
+        return drain(messages);
+    }
+
+    public List<Message> drainMessagesAfterAppend() {
+        return drain(messagesAfterAppend);
+    }
+
+    public List<ReadState> drainReadStates() {
+        return drain(readStates);
+    }
+
+    public PersistentState persistentState() {
+        return new PersistentState(term, votedFor);
+    }
+
+    public VolatileState volatileState() {
+        return new VolatileState(id, role.type());
+    }
+
+    public CheckpointState checkpointState() {
+        return new CheckpointState(log.committed());
+    }
+
+    public RaftLog log() {
+        return log;
     }
 
     // ────────────────────── SENDING MESSAGES ──────────────────────
@@ -211,7 +274,6 @@ public class Raft {
         role = leader;
         return leader;
     }
-
     /**
      * Transitions to Learner, adopting a new term if higher.
      *

@@ -23,11 +23,9 @@ public final class Candidate implements Role {
         if (votes.containsKey(voter)) {
             return false;
         }
-
         votes.put(voter, granted);
         return true;
     }
-
 
     public boolean electionRoundTimedOutAfterTick() {
         return electionRoundTimer.resetIfTimedOutAfterTick();

@@ -4,6 +4,9 @@ import consensus.algorithm.ElectionProtocol;
 import consensus.algorithm.LeaderLivenessPolicy;
 import consensus.algorithm.ProposalHandleMode;
 import consensus.algorithm.ReadIndexMode;
+import consensus.node.ExecutionModel;
+import consensus.storage.AppliableEntriesPolicy;
+
 /**
  * Immutable configuration for the Raft algorithm and its downstream components
  * (RaftLog, Inflights, etc.). If a {@code RaftConfig} instance exists, it is
@@ -18,11 +21,13 @@ public record RaftConfig(
         ProposalHandleMode proposalHandleMode,
         ReadIndexMode readIndexMode,
         LeaderLivenessPolicy leaderLivenessPolicy,
+        ExecutionModel executionModel,
         long maxMsgSize,
         long maxUncommittedSize,
         int maxInflightMsgs,
-        long maxInflightBytes
-) implements LeaderConfig, FollowerConfig, CandidateConfig, LearnerConfig {
+        long maxInflightBytes,
+        long maxApplyingEntriesSize
+) implements LeaderConfig, FollowerConfig, CandidateConfig, LearnerConfig, RaftLogConfig, PeerInflightConfig {
 
     public RaftConfig {
         if (heartbeatTimeout <= 0) {
@@ -54,6 +59,14 @@ public record RaftConfig(
         return electionTimeout;
     }
 
+    @Override
+    public AppliableEntriesPolicy appliableEntriesPolicy() {
+        return switch (executionModel) {
+            case ExecutionModel.SEQUENTIAL -> AppliableEntriesPolicy.COMMITTED;
+            case ExecutionModel.PIPELINED -> AppliableEntriesPolicy.PERSISTED_COMMITTED;
+        };
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -65,10 +78,13 @@ public record RaftConfig(
         private ProposalHandleMode proposalHandleMode;
         private ReadIndexMode readIndexMode;
         private LeaderLivenessPolicy leaderLivenessPolicy;
+        private ExecutionModel executionModel;
         private long maxMsgSize;
         private long maxUncommittedSize;
         private int maxInflightMsgs;
         private long maxInflightBytes;
+        private long maxApplyingEntriesSize;
+
 
         private Builder() {
             this.electionProtocol = ElectionProtocol.DUAL_ELECTION;
@@ -130,6 +146,16 @@ public record RaftConfig(
             return this;
         }
 
+        public Builder executionModel(ExecutionModel executionModel) {
+            this.executionModel = executionModel;
+            return this;
+        }
+
+        public Builder maxApplyingEntriesSize(long maxApplyingEntriesSize) {
+            this.maxApplyingEntriesSize = maxApplyingEntriesSize;
+            return this;
+        }
+
         public RaftConfig build() {
             return new RaftConfig(
                     electionTimeout,
@@ -138,10 +164,12 @@ public record RaftConfig(
                     proposalHandleMode,
                     readIndexMode,
                     leaderLivenessPolicy,
+                    executionModel,
                     maxMsgSize,
                     maxUncommittedSize,
                     maxInflightMsgs,
-                    maxInflightBytes
+                    maxInflightBytes,
+                    maxApplyingEntriesSize
             );
         }
     }

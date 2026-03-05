@@ -509,14 +509,14 @@ public sealed interface Message {
      * state, immutable across terms.</p>
      *
      * @param term     the Raft term when the persist was requested
-     * @param logIndex last persisted entry index (0 if no entries)
      * @param logTerm  term of the last persisted entry
+     * @param logIndex last persisted entry index (0 if no entries)
      * @param snapshot the persisted snapshot, if any
      */
     record LogPersisted(
             long term,
-            long logIndex,
             long logTerm,
+            long logIndex,
             Optional<Snapshot> snapshot
     ) implements Message {}
 

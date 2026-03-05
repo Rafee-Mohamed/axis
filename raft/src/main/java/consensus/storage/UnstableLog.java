@@ -33,7 +33,7 @@ public class UnstableLog {
     private long persistingUpTo;
 
     // Whether snapshot is currently being written to Storage
-    private boolean snapshotInProgress;
+    boolean snapshotInProgress;
 
     /**
      * Creates an UnstableLog starting after the last index in Storage.
@@ -294,5 +294,9 @@ public class UnstableLog {
                 ", snapshot=" + (snapshot != null ? snapshot.index() : "none") +
                 ", snapshotInProgress=" + snapshotInProgress +
                 '}';
+    }
+
+    public boolean snapshotInProgress() {
+        return snapshotInProgress;
     }
 }
