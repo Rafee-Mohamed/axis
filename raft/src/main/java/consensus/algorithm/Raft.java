@@ -64,16 +64,6 @@ public class Raft {
         }
     }
 
-    public void tick() throws StorageException {
-        switch (role) {
-            case Leader l -> handleTick(l);
-            case Candidate c -> handleTick(c);
-            case Follower f -> handleTick(f);
-            case Learner ln -> handleTick(ln);
-            case PreCandidate pc -> handleTick(pc);
-        }
-    }
-
     public NodeId id() {
         return id;
     }
@@ -270,8 +260,8 @@ public class Raft {
      * @return the newly created Leader role instance
      */
     private Leader becomeLeader() throws StorageException {
-        if (role instanceof Follower)
-            throw new IllegalStateException("Cannot transition from Follower role to Leader role");
+        if (!(role instanceof Candidate))
+            throw new IllegalStateException("Cannot transition from " + role.type() + " role to Leader role");
 
         var peers = membership.members();
         var leader = new Leader(id, peers, log.lastIndex(), config);
@@ -544,6 +534,7 @@ public class Raft {
 
     private void handleMessage(Leader l, Message m) throws StorageException {
         switch (m) {
+            case Message.Tick _ -> handleTick(l);
             case Message.RequestPreVote preVote -> rejectPreVote(preVote);
             case Message.RequestPreVoteResponse _ -> {
                 // Stale: this node was a PreCandidate, won the pre-election,
@@ -588,6 +579,8 @@ public class Raft {
             }
             case Message.LogPersisted lp -> handleLogPersisted(l, lp);
             case Message.AppliedToStateMachine asm -> handleAppliedToStateMachine(l, asm);
+            case Message.ApplyMembershipChange amc -> handleApplyMembershipChange(l, amc);
+            case Message.ApplyLeaveJoint _ -> handleApplyLeaveJoint(l);
             default -> {
             }
         }
@@ -595,6 +588,7 @@ public class Raft {
 
     private void handleMessage(Candidate c, Message m) throws StorageException {
         switch (m) {
+            case Message.Tick _ -> handleTick(c);
             case Message.TriggerElection(_) -> candidateElection(ElectionCause.ELECTION_ROUND_TIMEOUT);
             case Message.RequestPreVote preVote -> rejectPreVote(preVote);
             case Message.RequestPreVoteResponse _ -> {
@@ -638,6 +632,8 @@ public class Raft {
             }
             case Message.LogPersisted lp -> handleLogPersisted(lp);
             case Message.AppliedToStateMachine asm -> handleAppliedToStateMachine(asm);
+            case Message.ApplyMembershipChange amc -> handleApplyMembershipChange(amc);
+            case Message.ApplyLeaveJoint _ -> handleApplyLeaveJoint();
             default -> {
             }
         }
@@ -645,6 +641,7 @@ public class Raft {
 
     private void handleMessage(PreCandidate pc, Message m) throws StorageException {
         switch (m) {
+            case Message.Tick _ -> handleTick(pc);
             case Message.TriggerElection(_) -> preCandidateElection();
             case Message.RequestPreVote preVote -> rejectPreVote(preVote);
             case Message.RequestPreVoteResponse res -> handlePreVoteResponse(pc, res);
@@ -688,6 +685,8 @@ public class Raft {
             }
             case Message.LogPersisted lp -> handleLogPersisted(lp);
             case Message.AppliedToStateMachine asm -> handleAppliedToStateMachine(asm);
+            case Message.ApplyMembershipChange amc -> handleApplyMembershipChange(amc);
+            case Message.ApplyLeaveJoint _ -> handleApplyLeaveJoint();
             default -> {
             }
         }
@@ -695,6 +694,7 @@ public class Raft {
 
     private void handleMessage(Follower f, Message m) throws StorageException {
         switch (m) {
+            case Message.Tick _ -> handleTick(f);
             case Message.TriggerElection(_) -> startElection(f);
             case Message.RequestPreVote preVote -> handlePreVoteReq(f, preVote);
             case Message.RequestPreVoteResponse _ -> {
@@ -710,6 +710,7 @@ public class Raft {
                 // the abandoned election are irrelevant.
             }
             case Message.DataProposal p -> handleProposal(f, p);
+            case Message.MembershipChangeProposal mcp -> handleMembershipChange(f, mcp);
             case Message.AppendEntries ae -> handleAppendEntriesForVoter(ae);
             case Message.AppendEntriesResponse _ -> {
                 // Stale: this node was a Leader that discovered a higher term
@@ -732,6 +733,8 @@ public class Raft {
             case Message.ForgetLeader _ -> forgetLeader(f);
             case Message.LogPersisted lp -> handleLogPersisted(lp);
             case Message.AppliedToStateMachine asm -> handleAppliedToStateMachine(asm);
+            case Message.ApplyMembershipChange amc -> handleApplyMembershipChange(f, amc);
+            case Message.ApplyLeaveJoint _ -> handleApplyLeaveJoint(f);
             default -> {
             }
         }
@@ -739,9 +742,11 @@ public class Raft {
 
     private void handleMessage(Learner l, Message m) throws StorageException {
         switch (m) {
+            case Message.Tick _ -> handleTick(l);
             case Message.RequestPreVote preVote -> handlePreVoteReq(l, preVote);
             case Message.RequestVote voteReq -> handleVoteReq(l, voteReq);
             case Message.DataProposal p -> handleProposal(l, p);
+            case Message.MembershipChangeProposal mcp -> handleMembershipChange(l, mcp);
             case Message.AppendEntries ae -> handleAppendEntries(l, ae);
             case Message.AppendEntriesResponse _ -> {
                 // Stale: this node was a Leader that was demoted to Learner
@@ -764,6 +769,8 @@ public class Raft {
             case Message.ForgetLeader _ -> forgetLeader(l);
             case Message.LogPersisted lp -> handleLogPersisted(lp);
             case Message.AppliedToStateMachine asm -> handleAppliedToStateMachine(asm);
+            case Message.ApplyMembershipChange amc -> handleApplyMembershipChange(l, amc);
+            case Message.ApplyLeaveJoint _ -> handleApplyLeaveJoint(l);
             default -> {
             }
         }
@@ -1379,6 +1386,20 @@ public class Raft {
 
     }
 
+
+    private boolean canForwardProposal(boolean hasLeader) {
+        if (!hasLeader) {
+            notify(new Notification.DropProposal(ProposalDropReason.NO_LEADER));
+            return false;
+        }
+
+        if (config.proposalHandleMode() == ProposalHandleMode.DROP) {
+            notify(new Notification.DropProposal(ProposalDropReason.FORWARDING_DISABLED));
+            return false;
+        }
+
+        return true;
+    }
     /**
      * Handles a data proposal on a follower. Followers can't append to
      * the log, so they either forward the proposal to the leader or
@@ -1398,13 +1419,7 @@ public class Raft {
      * @param p the incoming data proposal
      */
     private void handleProposal(Follower f, Message.DataProposal p) {
-        if (!f.hasLeader()) {
-            notify(new Notification.DropProposal(ProposalDropReason.NO_LEADER));
-            return;
-        }
-
-        if (config.proposalHandleMode() == ProposalHandleMode.DROP) {
-            notify(new Notification.DropProposal(ProposalDropReason.FORWARDING_DISABLED));
+        if (!canForwardProposal(f.hasLeader())) {
             return;
         }
 
@@ -1420,13 +1435,7 @@ public class Raft {
      * @param p the incoming data proposal
      */
     private void handleProposal(Learner l, Message.DataProposal p) {
-        if (!l.hasLeader()) {
-            notify(new Notification.DropProposal(ProposalDropReason.NO_LEADER));
-            return;
-        }
-
-        if (config.proposalHandleMode() == ProposalHandleMode.DROP) {
-            notify(new Notification.DropProposal(ProposalDropReason.FORWARDING_DISABLED));
+        if (!canForwardProposal(l.hasLeader())) {
             return;
         }
 
@@ -2543,8 +2552,7 @@ public class Raft {
 
         // Same or higher term: confirm the leader identity. becomeLearner
         // resets the leader reference and adopts the term if higher.
-        becomeLearner(is.term(), is.from());
-        restore(is);
+        restore(becomeLearner(is.term(), is.from()), is);
     }
 
     /**
@@ -2575,23 +2583,26 @@ public class Raft {
 
         // Same or higher term: transition to Follower (or reset if already one),
         // confirming is.from() as the leader and resetting the election timer.
-        becomeFollower(is.term(), is.from());
-        restore(is);
+        restore(becomeFollower(is.term(), is.from()), is);
     }
 
     /**
-     * Shared response logic after term checks and role transitions.
+     * Role-specific snapshot restore logic after term checks and role
+     * transitions.
      *
      * <p>Delegates to {@link #tryRestore(Snapshot)} and sends an
      * AppendEntriesResponse back to the leader in both cases:</p>
      *
      * <ul>
      *   <li><b>Restored</b> (tryRestore returned true): the log was
-     *       replaced by the snapshot. Respond with {@code lastIndex()}
-     *       — the leader uses this to advance the peer's match index
-     *       to the snapshot point.</li>
-     *   <li><b>Not restored</b> (tryRestore returned false): the snapshot was
-     *       stale, redundant, or rejected. Respond with
+     *       replaced by the snapshot. The snapshot's membership is
+     *       adopted via {@link #restoreSnapshotMembership} which
+     *       triggers role-specific side effects (e.g. follower demoted
+     *       to learner, learner promoted to voter). Respond with
+     *       {@code lastIndex()} — the leader uses this to advance
+     *       the peer's match index to the snapshot point.</li>
+     *   <li><b>Not restored</b> (tryRestore returned false): the
+     *       snapshot was stale, redundant, or rejected. Respond with
      *       {@code committed} — tells the leader where this node
      *       currently stands so it can resume normal replication from
      *       that point.</li>
@@ -2603,15 +2614,54 @@ public class Raft {
      * different from AppendEntries rejection (log divergence) where the
      * response carries {@code false} and divergence hints.</p>
      *
-     * @param is the InstallSnapshot message (used for leader address
-     *           and snapshot data)
+     * @param f  the current follower role (used for membership switch)
+     * @param is the InstallSnapshot message
      */
-    private void restore(Message.InstallSnapshot is) throws StorageException {
+    private void restore(Follower f, Message.InstallSnapshot is) throws StorageException {
         if (tryRestore(is.snapshot())) {
+            restoreSnapshotMembership(f, is.snapshot());
             send(new Message.AppendEntriesResponse(is.from(), id, term, true, log.lastIndex(), 0, 0));
         } else {
             send(new Message.AppendEntriesResponse(is.from(), id, term, true, log.committed(), 0, 0));
         }
+    }
+
+    /**
+     * @param l  the current learner role (used for membership switch)
+     * @param is the InstallSnapshot message
+     * @see #restore(Follower, Message.InstallSnapshot)
+     */
+    private void restore(Learner l, Message.InstallSnapshot is) throws StorageException {
+        if (tryRestore(is.snapshot())) {
+            restoreSnapshotMembership(l, is.snapshot());
+            send(new Message.AppendEntriesResponse(is.from(), id, term, true, log.lastIndex(), 0, 0));
+        } else {
+            send(new Message.AppendEntriesResponse(is.from(), id, term, true, log.committed(), 0, 0));
+        }
+    }
+
+    /**
+     * Replaces the current membership with the snapshot's membership
+     * and triggers role-specific side effects via
+     * {@link #switchMembership}. A follower may be demoted to learner;
+     * a learner may be promoted to voter.
+     *
+     * @param f        the current follower role (used for demotion check)
+     * @param snapshot the restored snapshot containing the new membership
+     */
+    private void restoreSnapshotMembership(Follower f, Snapshot snapshot) {
+        membership = snapshot.membership();
+        switchMembership(f);
+    }
+
+    /**
+     * @param l        the current learner role (used for promotion check)
+     * @param snapshot the restored snapshot containing the new membership
+     * @see #restoreSnapshotMembership(Follower, Snapshot)
+     */
+    private void restoreSnapshotMembership(Learner l, Snapshot snapshot) {
+        membership = snapshot.membership();
+        switchMembership(l);
     }
 
     /**
@@ -2671,7 +2721,6 @@ public class Raft {
         }
 
         log.restore(snapshot);
-        switchMembership(snapshot.membership());
         return true;
     }
 
@@ -2952,6 +3001,22 @@ public class Raft {
         appendMembershipEntry(l, new Entry.LeaveJoint(term, membershipChangeIndex), membershipChangeIndex);
     }
 
+    private void handleMembershipChange(Follower f, Message.MembershipChangeProposal mcp) throws StorageException {
+        if (!canForwardProposal(f.hasLeader())) {
+            return;
+        }
+
+        step(new Message.MembershipChangeProposal(f.leaderId(), id, mcp.membershipChanges()));
+    }
+
+    private void handleMembershipChange(Learner l, Message.MembershipChangeProposal mcp) throws StorageException {
+        if (!canForwardProposal(l.hasLeader())) {
+            return;
+        }
+
+        step(new Message.MembershipChangeProposal(l.leaderId(), id, mcp.membershipChanges()));
+    }
+
     /**
      * Common gate checks for any membership change proposal (enter or
      * leave).
@@ -3023,6 +3088,96 @@ public class Raft {
     // ────────────────────── MEMBERSHIP CHANGE — APPLY (COMMIT-TIME) ──────────────────────
 
     /**
+     * Handles a committed membership change fed back from the engine
+     * via {@link Message.ApplyMembershipChange}.
+     *
+     * <p>Two steps: (1) apply the change to the membership config via
+     * {@link #applyMembershipChange}, (2) trigger role-specific side
+     * effects via {@link #switchMembership} — leader reconciles
+     * progress, follower/learner checks for promotion/demotion.</p>
+     *
+     * <p>For Candidate/PreCandidate the config is updated but no
+     * role switch occurs — the election outcome will determine the
+     * next role.</p>
+     *
+     * @param l   the current leader role (used for progress reconciliation)
+     * @param amc the committed membership change message
+     */
+    private void handleApplyMembershipChange(Leader l, Message.ApplyMembershipChange amc) throws StorageException {
+        applyMembershipChange(amc.changes());
+        switchMembership(l);
+    }
+
+    /**
+     * @param f   the current follower role (used for demotion check)
+     * @param amc the committed membership change message
+     * @see #handleApplyMembershipChange(Leader, Message.ApplyMembershipChange)
+     */
+    private void handleApplyMembershipChange(Follower f, Message.ApplyMembershipChange amc) throws StorageException {
+        applyMembershipChange(amc.changes());
+        switchMembership(f);
+    }
+
+    /**
+     * @param l   the current learner role (used for promotion check)
+     * @param amc the committed membership change message
+     * @see #handleApplyMembershipChange(Leader, Message.ApplyMembershipChange)
+     */
+    private void handleApplyMembershipChange(Learner l, Message.ApplyMembershipChange amc) throws StorageException {
+        applyMembershipChange(amc.changes());
+        switchMembership(l);
+    }
+
+    /**
+     * Candidate/PreCandidate: updates config only, no role switch.
+     *
+     * @param amc the committed membership change message
+     */
+    private void handleApplyMembershipChange(Message.ApplyMembershipChange amc) throws StorageException {
+        applyMembershipChange(amc.changes());
+    }
+
+    /**
+     * Handles a committed leave-joint entry fed back from the engine
+     * via {@link Message.ApplyLeaveJoint}.
+     *
+     * <p>Same pattern as
+     * {@link #handleApplyMembershipChange(Leader, Message.ApplyMembershipChange)}:
+     * apply the config change then trigger role-specific side effects.
+     * After leave-joint, the config is no longer joint and a new
+     * membership change can be proposed.</p>
+     *
+     * @param l the current leader role (used for progress reconciliation)
+     */
+    private void handleApplyLeaveJoint(Leader l) throws StorageException {
+        applyLeaveJoint();
+        switchMembership(l);
+    }
+
+    /**
+     * @param f the current follower role (used for demotion check)
+     * @see #handleApplyLeaveJoint(Leader)
+     */
+    private void handleApplyLeaveJoint(Follower f) throws StorageException {
+        applyLeaveJoint();
+        switchMembership(f);
+    }
+
+    /**
+     * @param l the current learner role (used for promotion check)
+     * @see #handleApplyLeaveJoint(Leader)
+     */
+    private void handleApplyLeaveJoint(Learner l) throws StorageException {
+        applyLeaveJoint();
+        switchMembership(l);
+    }
+
+    /** Candidate/PreCandidate: applies leave-joint config only, no role switch. */
+    private void handleApplyLeaveJoint() throws StorageException {
+        applyLeaveJoint();
+    }
+
+    /**
      * Applies a membership change entry that has been committed.
      *
      * <p>Creates a short-lived {@link MembershipChanger} with the
@@ -3033,10 +3188,9 @@ public class Raft {
      *
      * @param mc the membership changes from the committed entry
      */
-    public void applyMembershipChange(MembershipChanges mc) throws StorageException {
+    private void applyMembershipChange(MembershipChanges mc) throws StorageException {
         var changer = new MembershipChanger(membership);
-        var newMembership = changer.executeProtocol(mc);
-        switchMembership(newMembership);
+        membership = changer.executeProtocol(mc);
     }
 
     /**
@@ -3046,66 +3200,12 @@ public class Raft {
      * the sole config. nextLearners are moved to learners. After this,
      * the config is no longer joint.</p>
      */
-    public void applyLeaveJoint() throws StorageException {
+    private void applyLeaveJoint() throws StorageException {
         var changer = new MembershipChanger(membership);
-        var newMembership = changer.leaveJoint();
-        switchMembership(newMembership);
+        membership = changer.leaveJoint();
     }
 
-    /**
-     * Central dispatch for applying a new membership config across all
-     * roles.
-     *
-     * <p>Updates the Raft-level membership field, then delegates to
-     * role-specific handlers for side effects:</p>
-     *
-     * <ul>
-     *   <li><b>Leader</b>: reconciles peer progress, may step down if
-     *       removed or demoted, attempts commit advancement, and
-     *       manages transfer state.</li>
-     *   <li><b>Follower</b>: transitions to learner if demoted.</li>
-     *   <li><b>Learner</b>: transitions to follower if promoted to
-     *       voter.</li>
-     *   <li><b>Candidate / PreCandidate</b>: no special handling
-     *       needed — see below.</li>
-     * </ul>
-     *
-     * <h4>Why Candidate/PreCandidate needs no action</h4>
-     *
-     * <p>A candidate applying a config change that removes or demotes
-     * itself does not need to step down immediately. The election will
-     * self-correct:</p>
-     *
-     * <ul>
-     *   <li>If the candidate was <b>removed</b>, other nodes now use
-     *       the new config for vote decisions. The candidate cannot
-     *       gather a quorum from voters that no longer include it —
-     *       the election fails and it falls back to follower on
-     *       timeout.</li>
-     *   <li>If the candidate was <b>demoted to learner</b>, it
-     *       similarly cannot win since learners don't count toward
-     *       voter quorum.</li>
-     * </ul>
-     *
-     * <p>Crucially, this scenario is rare in practice because
-     * {@link #hasUnappliedMembershipChange()} prevents a node from
-     * starting an election while it has committed but unapplied config
-     * changes. A node must first apply all committed config changes
-     * (which updates its membership and role) before it can campaign.
-     * So by the time it becomes a candidate, it has already
-     * transitioned to the correct role.</p>
-     */
-    private void switchMembership(MembershipConfig mc) throws StorageException {
-        membership = mc;
-        switch (role) {
-            case Leader l -> applyNewMembership(l);
-            case Follower f -> applyNewMembership(f);
-            case Learner l -> applyNewMembership(l);
-            case Candidate _, PreCandidate _ -> {
 
-            }
-        }
-    }
 
     /**
      * Leader-specific side effects after a membership config change.
@@ -3135,7 +3235,7 @@ public class Raft {
      *       become leader.</li>
      * </ol>
      */
-    private void applyNewMembership(Leader l) throws StorageException {
+    private void switchMembership(Leader l) throws StorageException {
         l.applyNewMembership(membership, log.lastIndex());
 
         if (!membership.isMember(id)) {
@@ -3166,7 +3266,7 @@ public class Raft {
      * to the {@link Learner} role. It retains its known leader ID so
      * it can continue forwarding proposals.</p>
      */
-    private void applyNewMembership(Follower f) {
+    private void switchMembership(Follower f) {
         if (membership.isLearner(id)) {
             becomeLearner(term, f.leaderId());
         }
@@ -3180,7 +3280,7 @@ public class Raft {
      * to the {@link Follower} role. As a follower, it gains the
      * ability to campaign and participate in elections.</p>
      */
-    private void applyNewMembership(Learner l) {
+    private void switchMembership(Learner l) {
         if (membership.isVoter(id)) {
             becomeFollower(term, l.leaderId());
         }
@@ -3196,10 +3296,10 @@ public class Raft {
      * <ul>
      *   <li><b>Local (from == this node):</b> add to
      *       {@code readStates} — the application picks it up in the
-     *       next Ready cycle.</li>
+     *       next output cycle.</li>
      *   <li><b>Remote (a follower forwarded the read):</b> send a
      *       {@code ReadIndexResponse} message back. The follower then
-     *       adds the read state to its own Ready output.</li>
+     *       adds the read state to its own output.</li>
      * </ul>
      *
      * @param from      the node that originated the read request
@@ -3360,7 +3460,7 @@ public class Raft {
      * <p>The leader confirmed its authority and is telling this node
      * that the read is safe at the given index. The node adds a
      * {@link ReadState} to the output buffer — the application picks
-     * it up in the next Ready cycle, waits until
+     * it up in the next output cycle, waits until
      * {@code appliedIndex >= readIndex}, and then serves the read from
      * its local state machine.</p>
      */

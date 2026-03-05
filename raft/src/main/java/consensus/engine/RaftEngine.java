@@ -1,5 +1,6 @@
 package consensus.engine;
 
+import consensus.algorithm.NodeId;
 import consensus.algorithm.Raft;
 import consensus.algorithm.RaftState;
 import consensus.config.RaftConfig;
@@ -64,13 +65,35 @@ public class RaftEngine {
         return !volatileState.equals(raft.volatileState());
     }
 
+    private boolean isLocalMessage(Message message) {
+        return switch (message) {
+            case Message.Tick _,
+                 Message.TriggerElection _,
+                 Message.TriggerHeartbeat _,
+                 Message.CheckQuorum _,
+                 Message.LogPersisted _,
+                 Message.AppliedToStateMachine _,
+                 Message.PeerUnreachable _,
+                 Message.SnapshotStatus _,
+                 Message.ApplyMembershipChange _,
+                 Message.ApplyLeaveJoint _,
+                 Message.ForgetLeader _ -> true;
+            default -> false;
+        };
+    }
+
     public void process(RaftInput input) throws StorageException {
         switch (input) {
-            case RaftInput.Tick _ -> raft.tick();
+            case RaftInput.Tick _ -> raft.step(new Message.Tick());
             case RaftInput.ProposeData(var data) -> raft.step(new Message.DataProposal(raft.id(), raft.id(), data));
-            case RaftInput.ProposeMembershipChange(var changes) -> raft.step(new Message.MembershipChangeProposal(raft.id(), changes));
+            case RaftInput.ProposeMembershipChange(NodeId from, var changes) -> raft.step(new Message.MembershipChangeProposal(raft.id(), from, changes));
             case RaftInput.ProposeLeaveJoint _ -> raft.step(new Message.LeaveJointProposal());
-            case RaftInput.Receive(var message) -> raft.step(message);
+            case RaftInput.Receive(var message) -> {
+                if (isLocalMessage(message)) {
+                    return;
+                }
+                raft.step(message);
+            }
             case RaftInput.ReadIndex() -> raft.step(new Message.ReadIndex(raft.id(), raft.id()));
             case RaftInput.Responses(var responses) -> { for (var msg : responses) raft.step(msg); }
             case RaftInput.TriggerElection() -> raft.step(new Message.TriggerElection(raft.id()));
@@ -78,8 +101,8 @@ public class RaftEngine {
             case RaftInput.ReportSnapshotStatus(var id, var success) -> raft.step(new Message.SnapshotStatus(id, success));
             case RaftInput.TransferLeader(var from, var transferee) -> raft.step(new Message.TransferLeadership(raft.id(), from, transferee));
             case RaftInput.ForgetLeader() -> raft.step(new Message.ForgetLeader());
-            case RaftInput.ApplyMembership(var changes) -> raft.applyMembershipChange(changes);
-            case RaftInput.ApplyLeaveJoint _ -> raft.applyLeaveJoint();
+            case RaftInput.ApplyMembership(var changes) -> raft.step(new Message.ApplyMembershipChange(changes));
+            case RaftInput.ApplyLeaveJoint _ -> raft.step(new Message.ApplyLeaveJoint());
         }
     }
 

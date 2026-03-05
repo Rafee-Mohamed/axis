@@ -421,9 +421,11 @@ public sealed interface Message {
      * Internal: application proposes a membership configuration change.
      *
      * @param from       this node's id
+     * @param from       this node's id
      * @param membershipChanges    the membership changes to apply (add/remove voters/learners)
      */
     record MembershipChangeProposal(
+            NodeId to,
             NodeId from,
             MembershipChanges membershipChanges
     ) implements Message {
@@ -525,6 +527,14 @@ public sealed interface Message {
             List<Entry> entries
     ) implements Message {
     }
+
+    record Tick() implements Message {};
+
+    record ApplyMembershipChange(
+            MembershipChanges changes
+    ) implements Message {}
+
+    record ApplyLeaveJoint() implements Message {}
 
 
 }

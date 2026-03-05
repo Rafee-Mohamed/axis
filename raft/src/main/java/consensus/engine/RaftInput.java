@@ -10,7 +10,7 @@ import java.util.List;
 public sealed interface RaftInput {
     record Tick() implements RaftInput {}
     record ProposeData(List<byte[]> data) implements RaftInput {}
-    record ProposeMembershipChange(MembershipChanges changes) implements RaftInput {}
+    record ProposeMembershipChange(NodeId from, MembershipChanges changes) implements RaftInput {}
     record ProposeLeaveJoint() implements RaftInput {}
     record Receive(Message message) implements RaftInput {}
     record ReadIndex() implements RaftInput {}

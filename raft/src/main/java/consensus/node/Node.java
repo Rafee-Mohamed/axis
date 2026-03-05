@@ -55,8 +55,8 @@ public class Node {
         return future;
     }
 
-    public void propose(MembershipChanges changes) throws InterruptedException {
-        inbox.put(new Event.Fire(new RaftInput.ProposeMembershipChange(changes)));
+    public void propose(NodeId from, MembershipChanges changes) throws InterruptedException {
+        inbox.put(new Event.Fire(new RaftInput.ProposeMembershipChange(from, changes)));
     }
 
     public void proposeLeaveJoint() throws InterruptedException {
