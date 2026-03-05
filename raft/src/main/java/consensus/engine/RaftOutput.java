@@ -1,4 +1,4 @@
-package consensus.node;
+package consensus.engine;
 
 import consensus.algorithm.ReadState;
 import consensus.algorithm.Snapshot;

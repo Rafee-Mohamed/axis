@@ -3,20 +3,18 @@ package consensus.algorithm;
 import consensus.config.RaftConfig;
 import consensus.membership.*;
 import consensus.message.Message;
-import consensus.node.CheckpointState;
-import consensus.node.NodeId;
-import consensus.node.PersistentState;
-import consensus.node.VolatileState;
+import consensus.engine.CheckpointState;
+import consensus.engine.PersistentState;
+import consensus.engine.VolatileState;
 import consensus.storage.*;
 
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.random.RandomGenerator;
 
 public class Raft {
     private final NodeId id;
-    private long term;
+        private long term;
     private Optional<NodeId> votedFor;
 
     private final RaftConfig config;
@@ -123,7 +121,13 @@ public class Raft {
     }
 
     public VolatileState volatileState() {
-        return new VolatileState(id, role.type());
+        var leaderId = switch (role) {
+            case Leader _ -> id;
+            case Follower f when f.hasLeader() -> f.leaderId();
+            case Learner l when l.hasLeader() -> l.leaderId();
+            default -> null;
+        };
+        return new VolatileState(role.type(), Optional.ofNullable(leaderId));
     }
 
     public CheckpointState checkpointState() {
@@ -1404,7 +1408,7 @@ public class Raft {
             return;
         }
 
-        send(new Message.DataProposal(Optional.of(f.leaderId()), id, p.data()));
+        send(new Message.DataProposal(f.leaderId(), id, p.data()));
     }
 
     /**
@@ -1426,7 +1430,7 @@ public class Raft {
             return;
         }
 
-        send(new Message.DataProposal(Optional.of(l.leaderId()), id, p.data()));
+        send(new Message.DataProposal(l.leaderId(), id, p.data()));
     }
 
     /**
@@ -2851,7 +2855,7 @@ public class Raft {
         if (!f.hasLeader()) {
             return;
         }
-        send(new Message.TransferLeadership(f.leaderId(), id, tl.transferee(), tl.term()));
+        send(new Message.TransferLeadership(f.leaderId(), id, tl.transferee()));
     }
 
     /**
@@ -2868,7 +2872,7 @@ public class Raft {
         if (!l.hasLeader()) {
             return;
         }
-        send(new Message.TransferLeadership(l.leaderId(), id, tl.transferee(), tl.term()));
+        send(new Message.TransferLeadership(l.leaderId(), id, tl.transferee()));
     }
 
     // ────────────────────── MEMBERSHIP CHANGE — PROPOSAL HANDLING ──────────────────────
@@ -3029,7 +3033,7 @@ public class Raft {
      *
      * @param mc the membership changes from the committed entry
      */
-    private void applyMembershipChange(MembershipChanges mc) throws StorageException {
+    public void applyMembershipChange(MembershipChanges mc) throws StorageException {
         var changer = new MembershipChanger(membership);
         var newMembership = changer.executeProtocol(mc);
         switchMembership(newMembership);
@@ -3042,7 +3046,7 @@ public class Raft {
      * the sole config. nextLearners are moved to learners. After this,
      * the config is no longer joint.</p>
      */
-    private void applyLeaveJoint() throws StorageException {
+    public void applyLeaveJoint() throws StorageException {
         var changer = new MembershipChanger(membership);
         var newMembership = changer.leaveJoint();
         switchMembership(newMembership);
@@ -3332,7 +3336,7 @@ public class Raft {
             return;
         }
 
-        send(new Message.ReadIndex(f.leaderId(), id, term));
+        send(new Message.ReadIndex(f.leaderId(), id));
     }
 
     /**
@@ -3347,7 +3351,7 @@ public class Raft {
             // TODO: notify the application that the read cannot be served
             return;
         }
-        send(new Message.ReadIndex(l.leaderId(), id, term));
+        send(new Message.ReadIndex(l.leaderId(), id));
     }
 
     /**

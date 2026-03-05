@@ -5,7 +5,7 @@ import consensus.membership.JointConfig;
 import consensus.membership.MajorityConfig;
 import consensus.membership.MembershipConfig;
 import consensus.membership.MembershipTransition;
-import consensus.node.PersistentState;
+import consensus.engine.PersistentState;
 
 import java.util.ArrayList;
 import java.util.List;

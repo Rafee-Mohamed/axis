@@ -3,7 +3,6 @@ package consensus.algorithm;
 import consensus.config.LeaderConfig;
 import consensus.membership.MembershipConfig;
 import consensus.message.Message;
-import consensus.node.NodeId;
 import consensus.storage.Entry;
 
 import java.util.*;

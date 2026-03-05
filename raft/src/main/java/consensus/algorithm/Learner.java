@@ -1,7 +1,6 @@
 package consensus.algorithm;
 
 import consensus.config.LearnerConfig;
-import consensus.node.NodeId;
 
 import java.util.Optional;
 

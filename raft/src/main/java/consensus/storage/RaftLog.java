@@ -1,12 +1,9 @@
 package consensus.storage;
 
 import consensus.algorithm.Snapshot;
-import consensus.config.RaftConfig;
 import consensus.config.RaftLogConfig;
 
 import java.util.*;
-import java.util.function.Consumer;
-import java.util.function.Function;
 
 /**
  * RaftLog provides a unified view of the Raft log by combining:

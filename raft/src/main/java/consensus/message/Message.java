@@ -4,9 +4,7 @@ import consensus.algorithm.ElectionCause;
 import consensus.algorithm.Snapshot;
 import consensus.membership.MembershipChanges;
 import consensus.storage.Entry;
-import consensus.node.NodeId;
-import consensus.membership.MembershipTransition;
-import consensus.membership.MembershipChange;
+import consensus.algorithm.NodeId;
 
 import java.util.List;
 import java.util.Optional;
@@ -309,13 +307,11 @@ public sealed interface Message {
      * @param to         the current leader
      * @param from       the node requesting the transfer
      * @param transferee the node that should become the new leader
-     * @param term       the sender's term
      */
     record TransferLeadership(
             NodeId to,
             NodeId from,
-            NodeId transferee,
-            long term
+            NodeId transferee
     ) implements Message {
     }
 
@@ -351,12 +347,10 @@ public sealed interface Message {
      *
      * @param to      the leader
      * @param from    the follower requesting the read
-     * @param term    the follower's term
      */
     record ReadIndex(
             NodeId to,
-            NodeId from,
-            long term
+            NodeId from
     ) implements Message {
     }
 
@@ -412,12 +406,12 @@ public sealed interface Message {
      * On a follower/learner, the proposal is forwarded to the leader
      * (if forwarding is enabled) or dropped.</p>
      *
-     * @param to   the leader's id (when forwarding), or empty (local proposal)
+     * @param to   the same id when self
      * @param from this node's id
      * @param data the proposed data entries
      */
     record DataProposal(
-            Optional<NodeId> to,
+            NodeId to,
             NodeId from,
             List<byte[]> data
     ) implements Message {
@@ -428,12 +422,10 @@ public sealed interface Message {
      *
      * @param from       this node's id
      * @param membershipChanges    the membership changes to apply (add/remove voters/learners)
-     * @param context    opaque application data carried through the change
      */
     record MembershipChangeProposal(
             NodeId from,
-            MembershipChanges membershipChanges,
-            byte[] context
+            MembershipChanges membershipChanges
     ) implements Message {
     }
 

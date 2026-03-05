@@ -1,7 +1,5 @@
 package consensus.algorithm;
 
-import consensus.node.NodeId;
-
 import java.util.Optional;
 
 public record RaftState(

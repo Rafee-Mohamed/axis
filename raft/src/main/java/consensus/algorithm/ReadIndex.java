@@ -1,7 +1,6 @@
 package consensus.algorithm;
 
 import consensus.membership.MembershipConfig;
-import consensus.node.NodeId;
 
 import java.util.*;
 

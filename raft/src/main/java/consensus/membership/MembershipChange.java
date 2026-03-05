@@ -1,8 +1,6 @@
 package consensus.membership;
 
-import consensus.node.NodeId;
-
-import java.util.Objects;
+import consensus.algorithm.NodeId;
 
 public record MembershipChange(NodeId id, MembershipChangeType type) {
 }

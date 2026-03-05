@@ -1,7 +1,6 @@
 package consensus.algorithm;
 
 import consensus.config.CandidateConfig;
-import consensus.node.NodeId;
 
 import java.util.*;
 import java.util.function.Function;

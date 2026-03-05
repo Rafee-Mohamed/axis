@@ -1,7 +1,6 @@
 package consensus.algorithm;
 
 import consensus.config.FollowerConfig;
-import consensus.node.NodeId;
 
 import java.util.Optional;
 import java.util.random.RandomGenerator;

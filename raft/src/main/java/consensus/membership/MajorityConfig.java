@@ -1,11 +1,10 @@
 package consensus.membership;
 
-import consensus.node.NodeId;
+import consensus.algorithm.NodeId;
 
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
-import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 

@@ -1,4 +1,4 @@
-package consensus.node;
+package consensus.engine;
 
 import consensus.algorithm.Raft;
 import consensus.algorithm.RaftState;
@@ -62,6 +62,25 @@ public class RaftEngine {
         }
 
         return !volatileState.equals(raft.volatileState());
+    }
+
+    public void process(RaftInput input) throws StorageException {
+        switch (input) {
+            case RaftInput.Tick _ -> raft.tick();
+            case RaftInput.ProposeData(var data) -> raft.step(new Message.DataProposal(raft.id(), raft.id(), data));
+            case RaftInput.ProposeMembershipChange(var changes) -> raft.step(new Message.MembershipChangeProposal(raft.id(), changes));
+            case RaftInput.ProposeLeaveJoint _ -> raft.step(new Message.LeaveJointProposal());
+            case RaftInput.Receive(var message) -> raft.step(message);
+            case RaftInput.ReadIndex() -> raft.step(new Message.ReadIndex(raft.id(), raft.id()));
+            case RaftInput.Responses(var responses) -> { for (var msg : responses) raft.step(msg); }
+            case RaftInput.TriggerElection() -> raft.step(new Message.TriggerElection(raft.id()));
+            case RaftInput.ReportUnreachablePeer(var id) -> raft.step(new Message.PeerUnreachable(id));
+            case RaftInput.ReportSnapshotStatus(var id, var success) -> raft.step(new Message.SnapshotStatus(id, success));
+            case RaftInput.TransferLeader(var from, var transferee) -> raft.step(new Message.TransferLeadership(raft.id(), from, transferee));
+            case RaftInput.ForgetLeader() -> raft.step(new Message.ForgetLeader());
+            case RaftInput.ApplyMembership(var changes) -> raft.applyMembershipChange(changes);
+            case RaftInput.ApplyLeaveJoint _ -> raft.applyLeaveJoint();
+        }
     }
 
     public Optional<RaftOutput> advance() throws StorageException  {
@@ -135,7 +154,6 @@ public class RaftEngine {
                 responsesAfterApply
         ));
     }
-
 
 
 }
