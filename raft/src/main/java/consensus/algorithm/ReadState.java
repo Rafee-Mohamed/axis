@@ -1,19 +1,16 @@
 package consensus.algorithm;
 
 /**
- * A confirmed linearizable read index, surfaced to the application via Ready.
+ * A confirmed linearizable read, surfaced to the application via output.
  *
- * <p>Once the leader confirms its authority (via heartbeat majority ack or
- * lease), the committed index at the time the read was registered becomes a
- * {@code ReadState}. The application can then serve any read whose data is
- * at or before this index — it is guaranteed that no other leader could have
- * committed a conflicting entry.</p>
+ * <p>A {@code ReadState} is only surfaced once two conditions are met
+ * internally: (1) the leader confirmed its authority via heartbeat
+ * majority ack, and (2) the local state machine has applied up to at
+ * least the committed index recorded at read registration time. The
+ * application can serve the read immediately upon receiving this —
+ * no further waiting is required.</p>
  *
- * <p>The application must wait until its applied index {@code >=} this
- * {@code index} before responding to the client's read, to ensure the
- * state machine reflects all committed writes up to this point.</p>
- *
- * @param index the committed index at which the read is safe to serve
+ * @param index the committed index at which the read was registered
  */
 public record ReadState(long index) {
 }

@@ -1,15 +1,17 @@
 package consensus.node;
 
 import consensus.storage.Entry;
+import consensus.storage.Payload;
 
 import java.util.List;
 
-public final class ApplyTask implements CompletableTask {
-    private final List<Entry> entriesToApply;
+public final class ApplyTask<T extends Payload> implements CompletableTask {
+    private final List<T> entriesToApply;
     private final Runnable onComplete;
 
-    public ApplyTask(List<Entry> entriesToApply, Runnable onComplete) {
-        this.entriesToApply = entriesToApply;
+    @SuppressWarnings("unchecked")
+    public ApplyTask(List<Entry.Data> entriesToApply, Runnable onComplete) {
+        this.entriesToApply = entriesToApply.stream().map(d -> (T) d.data()).toList();
         this.onComplete = onComplete;
     }
 
@@ -18,7 +20,7 @@ public final class ApplyTask implements CompletableTask {
         onComplete.run();
     }
 
-    public List<Entry> entriesToApply() {
+    public List<T> entriesToApply() {
         return entriesToApply;
     }
 }

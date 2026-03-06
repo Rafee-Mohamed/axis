@@ -1,15 +1,15 @@
 package consensus.engine;
 
 import consensus.membership.MembershipChanges;
-import consensus.membership.MembershipConfig;
 import consensus.message.Message;
 import consensus.algorithm.NodeId;
+import consensus.storage.Payload;
 
 import java.util.List;
 
 public sealed interface RaftInput {
     record Tick() implements RaftInput {}
-    record ProposeData(List<byte[]> data) implements RaftInput {}
+    record ProposeData(List<? extends Payload> data) implements RaftInput {}
     record ProposeMembershipChange(NodeId from, MembershipChanges changes) implements RaftInput {}
     record ProposeLeaveJoint() implements RaftInput {}
     record Receive(Message message) implements RaftInput {}

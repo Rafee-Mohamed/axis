@@ -5,6 +5,7 @@ import consensus.algorithm.Snapshot;
 import consensus.membership.MembershipChanges;
 import consensus.storage.Entry;
 import consensus.algorithm.NodeId;
+import consensus.storage.Payload;
 
 import java.util.List;
 import java.util.Optional;
@@ -413,7 +414,7 @@ public sealed interface Message {
     record DataProposal(
             NodeId to,
             NodeId from,
-            List<byte[]> data
+            List<? extends Payload> data
     ) implements Message {
     }
 

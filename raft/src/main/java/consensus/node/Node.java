@@ -10,7 +10,9 @@ import consensus.engine.RaftOutput;
 import consensus.membership.MembershipChanges;
 import consensus.membership.MembershipConfig;
 import consensus.message.Message;
+import consensus.storage.Entry;
 import consensus.storage.LogStorage;
+import consensus.storage.Payload;
 import consensus.storage.StorageException;
 
 import java.util.ArrayList;
@@ -22,7 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.random.RandomGenerator;
 
-public class Node {
+public class Node<T extends Payload> {
     sealed interface Event {
         RaftInput input();
         record Fire(RaftInput input) implements Event {};
@@ -30,7 +32,7 @@ public class Node {
     }
 
     private final BlockingQueue<Event> inbox;
-    private final BlockingQueue<Work> outbox;
+    private final BlockingQueue<Work<T>> outbox;
     private final RaftEngine engine;
 
     public Node(
@@ -49,18 +51,22 @@ public class Node {
         engine = new RaftEngine(state, config, logStorage, membership, random);
     }
 
-    public CompletableFuture<Void> propose(List<byte[]> data) throws InterruptedException {
+    public CompletableFuture<Void> propose(List<T> data) throws InterruptedException {
         var future = new CompletableFuture<Void>();
         inbox.put(new Event.Awaited(new RaftInput.ProposeData(data), future));
         return future;
     }
 
-    public void propose(NodeId from, MembershipChanges changes) throws InterruptedException {
-        inbox.put(new Event.Fire(new RaftInput.ProposeMembershipChange(from, changes)));
+    public CompletableFuture<Void> propose(NodeId from, MembershipChanges changes) throws InterruptedException {
+        var future = new CompletableFuture<Void>();
+        inbox.put(new Event.Awaited(new RaftInput.ProposeMembershipChange(from, changes), future));
+        return future;
     }
 
-    public void proposeLeaveJoint() throws InterruptedException {
-        inbox.put(new Event.Fire(new RaftInput.ProposeLeaveJoint()));
+    public CompletableFuture<Void> proposeLeaveJoint() throws InterruptedException {
+        var future = new CompletableFuture<Void>();
+        inbox.put(new Event.Awaited(new RaftInput.ProposeLeaveJoint(), future));
+        return future;
     }
 
     public void tick() throws InterruptedException {
@@ -71,8 +77,10 @@ public class Node {
         inbox.put(new Event.Fire(new RaftInput.Receive(message)));
     }
 
-    public void readIndex() throws InterruptedException {
-        inbox.put(new Event.Fire(new RaftInput.ReadIndex()));
+    public CompletableFuture<Void> readIndex() throws InterruptedException {
+        var future = new CompletableFuture<Void>();
+        inbox.put(new Event.Awaited(new RaftInput.ReadIndex(), future));
+        return future;
     }
 
     public void triggerElection() throws InterruptedException {
@@ -94,16 +102,6 @@ public class Node {
     public void forgetLeader() throws InterruptedException {
         inbox.put(new Event.Fire(new RaftInput.ForgetLeader()));
     }
-
-    public void applyMembership(MembershipChanges changes) throws InterruptedException {
-        inbox.put(new Event.Fire(new RaftInput.ApplyMembership(changes)));
-    }
-
-    public void applyLeaveJoint() throws InterruptedException {
-        inbox.put(new Event.Fire(new RaftInput.ApplyLeaveJoint()));
-    }
-
-
 
     private Runnable enqueueOnComplete(List<Message> responses) {
         return () -> {
@@ -135,25 +133,55 @@ public class Node {
         return Optional.of(task);
     }
 
-    private Optional<ApplyTask> buildApplyTask(RaftOutput output) {
+    private Optional<ApplyTask<T>> buildApplyTask(RaftOutput output) {
         if (output.entriesToApply().isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(new ApplyTask(
-                output.entriesToApply(),
-                enqueueOnComplete(output.responsesAfterApply())
+
+        var dataEntries = new ArrayList<Entry.Data>();
+        RaftInput membershipChangeInput = null;
+
+        for (var entry: output.entriesToApply()) {
+            switch (entry) {
+                case Entry.Data d -> dataEntries.add(d);
+                case Entry.MembershipChange mc -> membershipChangeInput = new RaftInput.ApplyMembership(mc.membershipChanges());
+                case Entry.LeaveJoint _ -> membershipChangeInput = new RaftInput.ApplyLeaveJoint();
+                case Entry.Placeholder _ -> {}
+            }
+        }
+
+        var finalMembershipChangeInput = membershipChangeInput;
+        Runnable onComplete = () -> {
+            try {
+                if (finalMembershipChangeInput != null) {
+                    inbox.put(new Event.Fire(finalMembershipChangeInput));
+                }
+                inbox.put(new Event.Fire(new RaftInput.Responses(output.responsesAfterApply())));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+
+        if (dataEntries.isEmpty()) {
+            onComplete.run();
+            return Optional.empty();
+        }
+
+        return Optional.of(new ApplyTask<>(
+                dataEntries,
+                onComplete
         ));
     }
 
 
 
-    private Work buildWork(RaftOutput output) throws InterruptedException {
+    private Work<T> buildWork(RaftOutput output) throws InterruptedException {
         var persistTask = buildPersistTask(output);
         var applyTask = buildApplyTask(output);
         if (persistTask.isEmpty() && !output.responsesAfterPersist().isEmpty()) {
             inbox.put(new Event.Fire(new RaftInput.Responses(output.responsesAfterPersist())));
         }
-        return new Work(
+        return new Work<>(
                 output.volatileState(),
                 output.messages(),
                 output.readStates(),
@@ -162,14 +190,20 @@ public class Node {
         );
     }
 
-    private void trackAwaited(Event.Awaited awaited) {
-
+    private void track(Event.Awaited awaited) {
+        switch (awaited.input()) {
+            case RaftInput.ProposeData _ -> {}
+            case RaftInput.ProposeMembershipChange _ -> {}
+            case RaftInput.ProposeLeaveJoint _ -> {}
+            case RaftInput.ReadIndex _ -> {}
+            default -> throw new IllegalStateException("Cannot await RaftInput: " + awaited.input());
+        }
     }
 
     private void process(List<Event> events) throws StorageException {
         for (var event: events) {
             if (event instanceof Event.Awaited awaited) {
-                trackAwaited(awaited);
+                track(awaited);
             }
             engine.process(event.input());
         }
@@ -194,7 +228,7 @@ public class Node {
         }
     }
 
-    public Work takeWork() throws InterruptedException {
+    public Work<T> takeWork() throws InterruptedException {
         return outbox.take();
     }
 }

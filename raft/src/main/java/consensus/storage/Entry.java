@@ -15,9 +15,9 @@ sealed public interface Entry {
         return entries.stream().mapToLong(Entry::size).sum();
     }
     record Placeholder(long term, long index) implements Entry {}
-    record Data(long term, long index, byte[] data) implements Entry {
+    record Data(long term, long index, Payload data) implements Entry {
         @Override
-        public long size() { return data.length; }
+        public long size() { return data.bytes(); }
     }
     record MembershipChange(long term, long index, MembershipChanges membershipChanges) implements Entry {}
     record LeaveJoint(long term, long index) implements Entry {};

@@ -31,6 +31,7 @@ public class Raft {
     private final List<Message> messagesAfterAppend;
     private final List<Notification> notifications;
     private final List<ReadState> readStates;
+    private final Queue<ReadState> readsAwaitingApply;
 
     public Raft(
             RaftState state,
@@ -51,6 +52,7 @@ public class Raft {
         messagesAfterAppend = new ArrayList<>();
         notifications = new ArrayList<>();
         readStates = new ArrayList<>();
+        readsAwaitingApply = new ArrayDeque<>();
     }
 
     // ────────────────────── APIS ──────────────────────
@@ -1585,7 +1587,7 @@ public class Raft {
      * @param data raw byte arrays from the proposal
      * @return true if appended, false if uncommitted size limit exceeded
      */
-    private boolean appendProposalEntries(Leader l, List<byte[]> data) throws StorageException {
+    private boolean appendProposalEntries(Leader l, List<? extends Payload> data) throws StorageException {
         var nextIndex = log.lastIndex() + 1;
         var dataEntries = new ArrayList<Entry>(data.size());
         for (var entryData : data) {
@@ -3295,8 +3297,8 @@ public class Raft {
      *
      * <ul>
      *   <li><b>Local (from == this node):</b> add to
-     *       {@code readStates} — the application picks it up in the
-     *       next output cycle.</li>
+     *       {@code readsAwaitingApply} — released to the output
+     *       buffer once the applied index catches up.</li>
      *   <li><b>Remote (a follower forwarded the read):</b> send a
      *       {@code ReadIndexResponse} message back. The follower then
      *       adds the read state to its own output.</li>
@@ -3308,7 +3310,8 @@ public class Raft {
      */
     private void respondToReadIndex(NodeId from, long readIndex) {
         if (from.equals(id)) {
-            readStates.add(new ReadState(readIndex));
+            readsAwaitingApply.add(new ReadState(readIndex));
+            releaseAppliedReads();
             return;
         }
         send(new Message.ReadIndexResponse(from, id, term, readIndex));
@@ -3415,6 +3418,7 @@ public class Raft {
                 broadcastHeartbeat(l);
             }
         }
+
     }
 
     /**
@@ -3458,14 +3462,31 @@ public class Raft {
      * Handles a read index response received by a Follower or Learner.
      *
      * <p>The leader confirmed its authority and is telling this node
-     * that the read is safe at the given index. The node adds a
-     * {@link ReadState} to the output buffer — the application picks
-     * it up in the next output cycle, waits until
-     * {@code appliedIndex >= readIndex}, and then serves the read from
-     * its local state machine.</p>
+     * that the read is safe at the given index. The node adds it to
+     * {@code readsAwaitingApply} — it will be surfaced in the output
+     * once the local applied index reaches the read index.</p>
      */
     private void handleReadIndexResponse(Message.ReadIndexResponse rir) {
-        readStates.add(new ReadState(rir.readIndex()));
+        readsAwaitingApply.add(new ReadState(rir.readIndex()));
+        releaseAppliedReads();
+    }
+
+
+    /**
+     * Moves confirmed reads to the output buffer once the state machine
+     * has caught up.
+     *
+     * <p>Called from two trigger points: (1) when a read is first
+     * confirmed (heartbeat majority or leader response) — in case
+     * applied already covers the index, and (2) when
+     * {@code appliedTo} advances the applied watermark. The queue is
+     * FIFO-ordered by non-decreasing index, so draining stops at the
+     * first read whose index exceeds applied.</p>
+     */
+    private void releaseAppliedReads() {
+        while (!readsAwaitingApply.isEmpty() && readsAwaitingApply.peek().index() <= log.applied()) {
+            readStates.add(readsAwaitingApply.poll());
+        }
     }
 
     // ────────────────────── FORGET LEADER ──────────────────────
@@ -3531,6 +3552,7 @@ public class Raft {
     private void appliedTo(long index, long size) {
         var applied = Math.max(log.applied(), index);
         log.appliedTo(applied, size);
+        releaseAppliedReads();
     }
 
     /**
