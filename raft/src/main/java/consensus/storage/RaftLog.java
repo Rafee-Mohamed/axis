@@ -650,6 +650,10 @@ public class RaftLog {
         };
     }
 
+    public List<Entry> allAppliableEntries() {
+        return slice(applying + 1, committed + 1, Long.MAX_VALUE);
+    }
+
     // ==================== Internal Helpers ====================
 
     /**

@@ -1,8 +1,8 @@
 package consensus.engine;
 
-import consensus.algorithm.NodeId;
 import consensus.algorithm.Raft;
 import consensus.algorithm.RaftState;
+import consensus.algorithm.Rejection;
 import consensus.config.RaftConfig;
 import consensus.membership.MembershipConfig;
 import consensus.message.Message;
@@ -65,45 +65,37 @@ public class RaftEngine {
         return !volatileState.equals(raft.volatileState());
     }
 
-    private boolean isLocalMessage(Message message) {
-        return switch (message) {
-            case Message.Tick _,
-                 Message.TriggerElection _,
-                 Message.TriggerHeartbeat _,
-                 Message.CheckQuorum _,
-                 Message.LogPersisted _,
-                 Message.AppliedToStateMachine _,
-                 Message.PeerUnreachable _,
-                 Message.SnapshotStatus _,
-                 Message.ApplyMembershipChange _,
-                 Message.ApplyLeaveJoint _,
-                 Message.ForgetLeader _ -> true;
-            default -> false;
-        };
+    public void stepNoReject(Message response) throws StorageException {
+        var rejection = raft.step(response);
+        if (rejection.isPresent()) {
+            throw new IllegalStateException("Unexpected rejection from response: " + rejection.get());
+        }
     }
 
-    public void process(RaftInput input) throws StorageException {
-        switch (input) {
+    public Optional<Rejection> process(RaftInput input) throws StorageException {
+        return switch (input) {
             case RaftInput.Tick _ -> raft.step(new Message.Tick());
             case RaftInput.ProposeData(var data) -> raft.step(new Message.DataProposal(raft.id(), raft.id(), data));
-            case RaftInput.ProposeMembershipChange(NodeId from, var changes) -> raft.step(new Message.MembershipChangeProposal(raft.id(), from, changes));
-            case RaftInput.ProposeLeaveJoint _ -> raft.step(new Message.LeaveJointProposal());
-            case RaftInput.Receive(var message) -> {
-                if (isLocalMessage(message)) {
-                    return;
-                }
-                raft.step(message);
-            }
+            case RaftInput.ProposeMembershipChange(var changes) -> raft.step(new Message.MembershipChangeProposal(raft.id(), raft.id(), changes));
+            case RaftInput.ProposeLeaveJoint _ -> raft.step(new Message.LeaveJointProposal(raft.id(), raft.id()));
+            case RaftInput.Receive(var message) -> raft.step(message);
             case RaftInput.ReadIndex() -> raft.step(new Message.ReadIndex(raft.id(), raft.id()));
-            case RaftInput.Responses(var responses) -> { for (var msg : responses) raft.step(msg); }
             case RaftInput.TriggerElection() -> raft.step(new Message.TriggerElection(raft.id()));
             case RaftInput.ReportUnreachablePeer(var id) -> raft.step(new Message.PeerUnreachable(id));
             case RaftInput.ReportSnapshotStatus(var id, var success) -> raft.step(new Message.SnapshotStatus(id, success));
-            case RaftInput.TransferLeader(var from, var transferee) -> raft.step(new Message.TransferLeadership(raft.id(), from, transferee));
+            case RaftInput.TransferLeader(var transferee) -> raft.step(new Message.TransferLeadership(raft.id(), raft.id(), transferee));
             case RaftInput.ForgetLeader() -> raft.step(new Message.ForgetLeader());
             case RaftInput.ApplyMembership(var changes) -> raft.step(new Message.ApplyMembershipChange(changes));
             case RaftInput.ApplyLeaveJoint _ -> raft.step(new Message.ApplyLeaveJoint());
-        }
+            case RaftInput.ApplyResponse(var response) -> {
+                stepNoReject(response);
+                yield Optional.empty();
+            }
+            case RaftInput.PersistResponses(var responses) -> {
+                for (var res : responses) stepNoReject(res);
+                yield Optional.empty();
+            }
+        };
     }
 
     public Optional<RaftOutput> advance() throws StorageException  {
@@ -133,15 +125,15 @@ public class RaftEngine {
         var entriesToApply = raft.log().nextCommittedEntries();
 
         var responsesAfterPersist = new ArrayList<Message>();
-        var responsesAfterApply = new ArrayList<Message>();
+        var applyResponse = Optional.<Message.AppliedToStateMachine>empty();
 
         raft.log().acceptUnstable();
         if (!entriesToApply.isEmpty()) {
             raft.log().acceptApplying(entriesToApply.getLast().index(), Entry.calculateSize(entriesToApply));
-            responsesAfterApply.add(new Message.AppliedToStateMachine(entriesToApply));
+            applyResponse = Optional.of(new Message.AppliedToStateMachine(entriesToApply));
         }
 
-        var peerMessagesAfterAppend = new ArrayList<Message>();
+        var peerMessagesAfterAppend = new ArrayList<Message.Peer>();
 
         for (var msg: messagesAfterAppend) {
             var msgTo = switch (msg) {
@@ -163,18 +155,23 @@ public class RaftEngine {
             responsesAfterPersist.add(new Message.LogPersisted(raft.term(), lastEntryToPersist.term(), lastEntryToPersist.index(), snapshot));
         }
 
+        var readsAwaitingApply = raft.readsAwaitingApply();
+        var committedEntriesAwaitingApply = raft.log().allAppliableEntries();
+
         return Optional.of(new RaftOutput(
                 nextPersistentState,
                 nextVolatileState,
                 nextCheckpointState,
                 entriesToPersist,
                 entriesToApply,
+                committedEntriesAwaitingApply,
                 snapshot,
                 messages,
                 peerMessagesAfterAppend,
                 readStates,
+                readsAwaitingApply,
                 responsesAfterPersist,
-                responsesAfterApply
+                applyResponse
         ));
     }
 

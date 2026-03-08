@@ -2,11 +2,10 @@ package consensus.node;
 
 import consensus.algorithm.NodeId;
 import consensus.algorithm.RaftState;
+import consensus.algorithm.ReadState;
+import consensus.algorithm.Rejection;
 import consensus.config.RaftConfig;
-import consensus.engine.ExecutionModel;
-import consensus.engine.RaftEngine;
-import consensus.engine.RaftInput;
-import consensus.engine.RaftOutput;
+import consensus.engine.*;
 import consensus.membership.MembershipChanges;
 import consensus.membership.MembershipConfig;
 import consensus.message.Message;
@@ -15,25 +14,29 @@ import consensus.storage.LogStorage;
 import consensus.storage.Payload;
 import consensus.storage.StorageException;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.random.RandomGenerator;
 
-public class Node<T extends Payload> {
+public class Node<T extends TrackablePayload<ID>, ID> {
     sealed interface Event {
         RaftInput input();
         record Fire(RaftInput input) implements Event {};
         record Awaited(RaftInput input, CompletableFuture<Void> future) implements Event {};
     }
 
+    private final RaftEngine engine;
+
     private final BlockingQueue<Event> inbox;
     private final BlockingQueue<Work<T>> outbox;
-    private final RaftEngine engine;
+
+    private final ReadTracker readTracker;
+    private final MembershipTracker membershipTracker;
+    private final DataProposalTracker<T, ID> dataProposalTracker;
+
 
     public Node(
             RaftState state,
@@ -49,17 +52,20 @@ public class Node<T extends Payload> {
         };
         outbox = new ArrayBlockingQueue<>(outboxSize);
         engine = new RaftEngine(state, config, logStorage, membership, random);
+        readTracker = new ReadTracker();
+        membershipTracker = new MembershipTracker();
+        dataProposalTracker = new DataProposalTracker<>();
     }
 
-    public CompletableFuture<Void> propose(List<T> data) throws InterruptedException {
+    public CompletableFuture<Void> propose(T data) throws InterruptedException {
         var future = new CompletableFuture<Void>();
-        inbox.put(new Event.Awaited(new RaftInput.ProposeData(data), future));
+        inbox.put(new Event.Awaited(new RaftInput.ProposeData(Collections.singletonList(data)), future));
         return future;
     }
 
-    public CompletableFuture<Void> propose(NodeId from, MembershipChanges changes) throws InterruptedException {
+    public CompletableFuture<Void> propose(MembershipChanges changes) throws InterruptedException {
         var future = new CompletableFuture<Void>();
-        inbox.put(new Event.Awaited(new RaftInput.ProposeMembershipChange(from, changes), future));
+        inbox.put(new Event.Awaited(new RaftInput.ProposeMembershipChange(changes), future));
         return future;
     }
 
@@ -73,7 +79,7 @@ public class Node<T extends Payload> {
         inbox.put(new Event.Fire(new RaftInput.Tick()));
     }
 
-    public void receive(Message message) throws InterruptedException {
+    public void receive(Message.Peer message) throws InterruptedException {
         inbox.put(new Event.Fire(new RaftInput.Receive(message)));
     }
 
@@ -95,23 +101,14 @@ public class Node<T extends Payload> {
         inbox.put(new Event.Fire(new RaftInput.ReportSnapshotStatus(id, success)));
     }
 
-    public void transferLeader(NodeId from, NodeId transferee) throws InterruptedException {
-        inbox.put(new Event.Fire(new RaftInput.TransferLeader(from, transferee)));
+    public void transferLeader(NodeId transferee) throws InterruptedException {
+        inbox.put(new Event.Fire(new RaftInput.TransferLeader(transferee)));
     }
 
     public void forgetLeader() throws InterruptedException {
         inbox.put(new Event.Fire(new RaftInput.ForgetLeader()));
     }
 
-    private Runnable enqueueOnComplete(List<Message> responses) {
-        return () -> {
-            try {
-                inbox.put(new Event.Fire(new RaftInput.Responses(responses)));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        };
-    }
 
     private Optional<PersistTask> buildPersistTask(RaftOutput output) {
         if (output.persistentState().isEmpty()
@@ -121,27 +118,35 @@ public class Node<T extends Payload> {
             return Optional.empty();
         }
 
+        Runnable onComplete = () -> {
+            try {
+                inbox.put(new Event.Fire(new RaftInput.PersistResponses(output.persistResponses())));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+
         var task = new PersistTask(
                 output.persistentState().orElse(null),
                 output.checkpointState().orElse(null),
                 output.snapshot().orElse(null),
                 output.entriesToPersist(),
                 output.messagesAfterPersist(),
-                enqueueOnComplete(output.responsesAfterPersist())
+                onComplete
         );
 
         return Optional.of(task);
     }
 
     private Optional<ApplyTask<T>> buildApplyTask(RaftOutput output) {
-        if (output.entriesToApply().isEmpty()) {
+        if (output.committedEntriesToApply().isEmpty()) {
             return Optional.empty();
         }
 
         var dataEntries = new ArrayList<Entry.Data>();
         RaftInput membershipChangeInput = null;
 
-        for (var entry: output.entriesToApply()) {
+        for (var entry: output.committedEntriesToApply()) {
             switch (entry) {
                 case Entry.Data d -> dataEntries.add(d);
                 case Entry.MembershipChange mc -> membershipChangeInput = new RaftInput.ApplyMembership(mc.membershipChanges());
@@ -156,7 +161,10 @@ public class Node<T extends Payload> {
                 if (finalMembershipChangeInput != null) {
                     inbox.put(new Event.Fire(finalMembershipChangeInput));
                 }
-                inbox.put(new Event.Fire(new RaftInput.Responses(output.responsesAfterApply())));
+                if (output.applyResponse().isPresent()) {
+                    inbox.put(new Event.Fire(new RaftInput.ApplyResponse(output.applyResponse().get())));
+                }
+
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
@@ -173,39 +181,54 @@ public class Node<T extends Payload> {
         ));
     }
 
-
-
     private Work<T> buildWork(RaftOutput output) throws InterruptedException {
         var persistTask = buildPersistTask(output);
         var applyTask = buildApplyTask(output);
-        if (persistTask.isEmpty() && !output.responsesAfterPersist().isEmpty()) {
-            inbox.put(new Event.Fire(new RaftInput.Responses(output.responsesAfterPersist())));
+        if (persistTask.isEmpty() && !output.persistResponses().isEmpty()) {
+            inbox.put(new Event.Fire(new RaftInput.PersistResponses(output.persistResponses())));
         }
         return new Work<>(
                 output.volatileState(),
                 output.messages(),
-                output.readStates(),
                 persistTask,
                 applyTask
         );
     }
 
+    private void process(RaftOutput output) {
+        readTracker.reconcile(output.readsAwaitingApply(), output.readStates(), output.volatileState());
+        membershipTracker.reconcile(output.committedEntriesToApply(), output.volatileState());
+        dataProposalTracker.reconcile(output.committedEntriesToApply(), output.committedEntriesAwaitingApply(), output.volatileState());
+    }
+
+    @SuppressWarnings("unchecked")
     private void track(Event.Awaited awaited) {
         switch (awaited.input()) {
-            case RaftInput.ProposeData _ -> {}
-            case RaftInput.ProposeMembershipChange _ -> {}
-            case RaftInput.ProposeLeaveJoint _ -> {}
-            case RaftInput.ReadIndex _ -> {}
+            case RaftInput.ProposeData(var data) -> {
+                // singleton list
+                var trackable = (T) data.getFirst();
+                dataProposalTracker.submit(trackable.id(), awaited.future());
+            }
+            case RaftInput.ProposeMembershipChange _,
+                 RaftInput.ProposeLeaveJoint _ -> membershipTracker.submit(awaited.future());
+            case RaftInput.ReadIndex _ -> readTracker.submit(awaited.future());
             default -> throw new IllegalStateException("Cannot await RaftInput: " + awaited.input());
         }
     }
 
     private void process(List<Event> events) throws StorageException {
         for (var event: events) {
+            var rejection = engine.process(event.input());
+            membershipTracker.completeIfMembershipApplied(event.input());
+            dataProposalTracker.releaseIfApplied(event.input());
+
             if (event instanceof Event.Awaited awaited) {
-                track(awaited);
+                if (rejection.isPresent()) {
+                    awaited.future().completeExceptionally(RejectionException.from(rejection.get()));
+                } else {
+                    track(awaited);
+                }
             }
-            engine.process(event.input());
         }
     }
 
@@ -219,6 +242,7 @@ public class Node<T extends Payload> {
 
                 var output = engine.advance();
                 if (output.isPresent()) {
+                    process(output.get());
                     outbox.put(buildWork(output.get()));
                 }
             } catch (InterruptedException e) {

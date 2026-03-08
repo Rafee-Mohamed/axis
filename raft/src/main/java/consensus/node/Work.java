@@ -10,8 +10,7 @@ import java.util.Optional;
 
 public record Work<T extends Payload>(
         Optional<VolatileState> volatileState,
-        List<Message> messages,
-        List<ReadState> readStates,
+        List<Message.Peer> messages,
         Optional<PersistTask> persistTask,
         Optional<ApplyTask<T>> applyTask
 ) {

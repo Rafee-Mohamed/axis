@@ -14,7 +14,7 @@ public final class PersistTask implements CompletableTask {
     private final Optional<CheckpointState> checkpointState;
     private final Optional<Snapshot> snapshot;
     private final List<Entry> entriesToPersist;
-    private final List<Message> messagesAfterPersist;
+    private final List<Message.Peer> messagesAfterPersist;
     private final Runnable onComplete;
 
     public PersistTask(
@@ -22,7 +22,7 @@ public final class PersistTask implements CompletableTask {
              CheckpointState checkpointState,
              Snapshot snapshot,
              List<Entry> entriesToPersist,
-             List<Message> messagesAfterPersist,
+             List<Message.Peer> messagesAfterPersist,
              Runnable onComplete
     ) {
         this.persistentState = Optional.ofNullable(persistentState);
@@ -54,7 +54,7 @@ public final class PersistTask implements CompletableTask {
         return entriesToPersist;
     }
 
-    public List<Message> messagesAfterPersist() {
+    public List<Message.Peer> messagesAfterPersist() {
         return messagesAfterPersist;
     }
 }

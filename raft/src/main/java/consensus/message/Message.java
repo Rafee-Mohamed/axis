@@ -19,6 +19,9 @@ import java.util.Optional;
  */
 public sealed interface Message {
 
+    sealed interface Internal extends Message {}
+    sealed interface Peer extends Message {}
+
     // ═══════════════════════════════════════════════════════════════════════════
     // REPLICATION MESSAGES
     // ═══════════════════════════════════════════════════════════════════════════
@@ -54,7 +57,7 @@ public sealed interface Message {
             long prevLogIndex,
             List<Entry> entries,
             long leaderCommit
-    ) implements Message {
+    ) implements Peer {
     }
 
     /**
@@ -107,7 +110,7 @@ public sealed interface Message {
             long index,
             long termHint,
             long indexHint
-    ) implements Message {
+    ) implements Peer {
     }
 
     /**
@@ -129,7 +132,7 @@ public sealed interface Message {
             long term,
             long leaderCommit,
             long sequence
-    ) implements Message {
+    ) implements Peer {
     }
 
     /**
@@ -149,7 +152,7 @@ public sealed interface Message {
             NodeId from,
             long term,
             long sequence
-    ) implements Message {
+    ) implements Peer {
     }
 
     /**
@@ -176,7 +179,7 @@ public sealed interface Message {
             NodeId from,
             long term,
             Snapshot snapshot
-    ) implements Message {
+    ) implements Peer {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -232,7 +235,7 @@ public sealed interface Message {
             long lastLogTerm,
             long lastLogIndex,
             ElectionCause cause
-    ) implements Message {
+    ) implements Peer {
     }
 
     /**
@@ -251,7 +254,7 @@ public sealed interface Message {
             NodeId from,
             long term,
             boolean voteGranted
-    ) implements Message {
+    ) implements Peer {
     }
 
     /**
@@ -275,7 +278,7 @@ public sealed interface Message {
             long term,
             long lastLogTerm,
             long lastLogIndex
-    ) implements Message {
+    ) implements Peer {
     }
 
     /**
@@ -291,7 +294,7 @@ public sealed interface Message {
             NodeId from,
             long term,
             boolean voteGranted
-    ) implements Message {
+    ) implements Peer {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -313,7 +316,7 @@ public sealed interface Message {
             NodeId to,
             NodeId from,
             NodeId transferee
-    ) implements Message {
+    ) implements Peer {
     }
 
     /**
@@ -332,7 +335,7 @@ public sealed interface Message {
             NodeId to,
             NodeId from,
             long term
-    ) implements Message {
+    ) implements Peer {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -352,7 +355,7 @@ public sealed interface Message {
     record ReadIndex(
             NodeId to,
             NodeId from
-    ) implements Message {
+    ) implements Peer {
     }
 
     /**
@@ -373,7 +376,7 @@ public sealed interface Message {
             NodeId from,
             long term,
             long readIndex
-    ) implements Message {
+    ) implements Peer {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -387,7 +390,7 @@ public sealed interface Message {
      */
     record TriggerElection(
             NodeId from
-    ) implements Message {
+    ) implements Internal {
     }
 
     /**
@@ -397,7 +400,7 @@ public sealed interface Message {
      */
     record TriggerHeartbeat(
             NodeId from
-    ) implements Message {
+    ) implements Internal {
     }
 
     /**
@@ -415,7 +418,7 @@ public sealed interface Message {
             NodeId to,
             NodeId from,
             List<? extends Payload> data
-    ) implements Message {
+    ) implements Peer {
     }
 
     /**
@@ -429,10 +432,13 @@ public sealed interface Message {
             NodeId to,
             NodeId from,
             MembershipChanges membershipChanges
-    ) implements Message {
+    ) implements Peer {
     }
 
-    record LeaveJointProposal() implements Message {}
+    record LeaveJointProposal(
+            NodeId to,
+            NodeId from
+    ) implements Peer {}
 
     /**
      * Internal: leader's check-quorum tick — verify a majority of peers
@@ -442,7 +448,7 @@ public sealed interface Message {
      */
     record CheckQuorum(
             NodeId from
-    ) implements Message {
+    ) implements Internal {
     }
 
     /**
@@ -460,7 +466,7 @@ public sealed interface Message {
     record SnapshotStatus(
             NodeId peer,
             boolean success
-    ) implements Message {
+    ) implements Internal {
     }
 
     /**
@@ -475,7 +481,7 @@ public sealed interface Message {
      */
     record PeerUnreachable(
             NodeId peer
-    ) implements Message {
+    ) implements Internal {
     }
 
     /**
@@ -490,7 +496,7 @@ public sealed interface Message {
      * <p>Incompatible with lease-based reads — see
      * {@link consensus.algorithm.Raft} forgetLeader methods for details.</p>
      */
-    record ForgetLeader() implements Message {}
+    record ForgetLeader() implements Internal {}
 
 
     /**
@@ -513,7 +519,7 @@ public sealed interface Message {
             long logTerm,
             long logIndex,
             Optional<Snapshot> snapshot
-    ) implements Message {}
+    ) implements Internal {}
 
     /**
      * Local message: committed entries have been applied to the state machine.
@@ -526,16 +532,16 @@ public sealed interface Message {
      */
     record AppliedToStateMachine(
             List<Entry> entries
-    ) implements Message {
+    ) implements Internal {
     }
 
-    record Tick() implements Message {};
+    record Tick() implements Internal {};
 
     record ApplyMembershipChange(
             MembershipChanges changes
-    ) implements Message {}
+    ) implements Internal {}
 
-    record ApplyLeaveJoint() implements Message {}
+    record ApplyLeaveJoint() implements Internal {}
 
 
 }

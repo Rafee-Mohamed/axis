@@ -17,7 +17,7 @@ public class InMemoryLogStorage implements LogStorage {
     private List<Entry> entries;
 
     public InMemoryLogStorage() {
-        persistentState = new PersistentState(0, 0, null);
+        persistentState = new PersistentState(0, null);
         var membershipConfig = new MembershipConfig(new JointConfig(new MajorityConfig(Set.of()), new MajorityConfig(Set.of())), Set.of(), Set.of(), MembershipTransition.JOINT_AUTO);
         snapshot = new Snapshot(0, 0, membershipConfig, new byte[0]);
         entries = new ArrayList<>(1024);

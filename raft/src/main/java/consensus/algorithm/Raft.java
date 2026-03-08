@@ -26,10 +26,11 @@ public class Raft {
 
     private final RandomGenerator random;
 
+    private Rejection rejection;
+
     // Output buffers
-    private final List<Message> messages;
-    private final List<Message> messagesAfterAppend;
-    private final List<Notification> notifications;
+    private final List<Message.Peer> messages;
+    private final List<Message.Peer> messagesAfterAppend;
     private final List<ReadState> readStates;
     private final Queue<ReadState> readsAwaitingApply;
 
@@ -50,13 +51,14 @@ public class Raft {
         membership = membershipConfig;
         messages = new ArrayList<>();
         messagesAfterAppend = new ArrayList<>();
-        notifications = new ArrayList<>();
         readStates = new ArrayList<>();
         readsAwaitingApply = new ArrayDeque<>();
+        rejection = null;
     }
 
     // ────────────────────── APIS ──────────────────────
-    public void step(Message m) throws StorageException {
+    public Optional<Rejection> step(Message m) throws StorageException {
+        rejection = null;
         switch (role) {
             case Leader l -> handleMessage(l, m);
             case Candidate c -> handleMessage(c, m);
@@ -64,6 +66,7 @@ public class Raft {
             case Learner ln -> handleMessage(ln, m);
             case PreCandidate pc -> handleMessage(pc, m);
         }
+        return Optional.ofNullable(rejection);
     }
 
     public NodeId id() {
@@ -78,17 +81,6 @@ public class Raft {
         return !messages.isEmpty() || !messagesAfterAppend.isEmpty() || !readStates.isEmpty();
     }
 
-    public List<Message> messages() {
-        return Collections.unmodifiableList(messages);
-    }
-
-    public List<Message> messagesAfterAppend() {
-        return Collections.unmodifiableList(messagesAfterAppend);
-    }
-
-    public List<ReadState> readStates() {
-        return Collections.unmodifiableList(readStates);
-    }
 
     private <T> List<T> drain(List<T> list) {
         var items = new ArrayList<>(list);
@@ -96,11 +88,15 @@ public class Raft {
         return items;
     }
 
-    public List<Message> drainMessages() {
+    public List<ReadState> readsAwaitingApply() {
+        return List.copyOf(readsAwaitingApply);
+    }
+
+    public List<Message.Peer> drainMessages() {
         return drain(messages);
     }
 
-    public List<Message> drainMessagesAfterAppend() {
+    public List<Message.Peer> drainMessagesAfterAppend() {
         return drain(messagesAfterAppend);
     }
 
@@ -131,7 +127,7 @@ public class Raft {
     }
 
     // ────────────────────── SENDING MESSAGES ──────────────────────
-    private void send(Message m) {
+    private void send(Message.Peer m) {
         if (m instanceof Message.AppendEntriesResponse || m instanceof Message.RequestPreVoteResponse || m instanceof Message.RequestVoteResponse) {
             messagesAfterAppend.add(m);
         } else {
@@ -140,8 +136,20 @@ public class Raft {
 
     }
 
-    private void notify(Notification n) {
-        notifications.add(n);
+    private void reject(Rejection r) {
+        rejection = r;
+    }
+
+    private void reject(DataDropReason reason) {
+        reject(new Rejection.DataProposalRejected(reason));
+    }
+
+    private void reject(MembershipChangeDropReason reason) {
+        reject(new Rejection.MembershipChangeRejected(reason));
+    }
+
+    private void reject(ReadDropReason reason) {
+        reject(new Rejection.ReadIndexRejected(reason));
     }
 
     // ────────────────────── ROLE TRANSITIONS ──────────────────────
@@ -600,7 +608,9 @@ public class Raft {
             }
             case Message.RequestVote voteReq -> handleHigherTermVoteReq(voteReq);
             case Message.RequestVoteResponse res -> handleVoteResponse(c, res);
-            case Message.DataProposal _ -> dropProposal(ProposalDropReason.NO_LEADER);
+            case Message.DataProposal _ -> reject(DataDropReason.NO_LEADER);
+            case Message.MembershipChangeProposal _,
+                 Message.LeaveJointProposal _ -> reject(MembershipChangeDropReason.NO_LEADER);
             case Message.AppendEntries ae -> handleAppendEntriesForVoter(ae);
             case Message.InstallSnapshot is -> handleInstallSnapshotForVoter(is);
             case Message.Heartbeat hb -> handleHeartbeatForVoter(hb);
@@ -616,6 +626,7 @@ public class Raft {
                 // retry after a new leader is elected.
             }
             case Message.ReadIndex _ -> {
+                reject(ReadDropReason.NO_LEADER);
                 // Dropped: a Candidate is mid-election with no known leader.
                 // Cannot serve reads (not the leader) and cannot forward
                 // (don't know who the leader is). The application should
@@ -648,7 +659,9 @@ public class Raft {
             case Message.RequestPreVote preVote -> rejectPreVote(preVote);
             case Message.RequestPreVoteResponse res -> handlePreVoteResponse(pc, res);
             case Message.RequestVote voteReq -> handleHigherTermVoteReq(voteReq);
-            case Message.DataProposal _ -> dropProposal(ProposalDropReason.NO_LEADER);
+            case Message.DataProposal _ -> reject(DataDropReason.NO_LEADER);
+            case Message.MembershipChangeProposal _,
+                 Message.LeaveJointProposal _ -> reject(MembershipChangeDropReason.NO_LEADER);
             case Message.AppendEntries ae -> handleAppendEntriesForVoter(ae);
             case Message.InstallSnapshot is -> handleInstallSnapshotForVoter(is);
             case Message.Heartbeat hb -> handleHeartbeatForVoter(hb);
@@ -670,6 +683,7 @@ public class Raft {
                 // this transitional state.
             }
             case Message.ReadIndex _ -> {
+                reject(ReadDropReason.NO_LEADER);
                 // Dropped: a PreCandidate is mid-pre-election with no known
                 // leader. Same reasoning as Candidate — cannot serve or
                 // forward reads. The application should retry after an
@@ -713,6 +727,7 @@ public class Raft {
             }
             case Message.DataProposal p -> handleProposal(f, p);
             case Message.MembershipChangeProposal mcp -> handleMembershipChange(f, mcp);
+            case Message.LeaveJointProposal _ -> handleLeaveJoint(f);
             case Message.AppendEntries ae -> handleAppendEntriesForVoter(ae);
             case Message.AppendEntriesResponse _ -> {
                 // Stale: this node was a Leader that discovered a higher term
@@ -749,6 +764,7 @@ public class Raft {
             case Message.RequestVote voteReq -> handleVoteReq(l, voteReq);
             case Message.DataProposal p -> handleProposal(l, p);
             case Message.MembershipChangeProposal mcp -> handleMembershipChange(l, mcp);
+            case Message.LeaveJointProposal _ -> handleLeaveJoint(l);
             case Message.AppendEntries ae -> handleAppendEntries(l, ae);
             case Message.AppendEntriesResponse _ -> {
                 // Stale: this node was a Leader that was demoted to Learner
@@ -1367,36 +1383,50 @@ public class Raft {
      */
     private void handleProposal(Leader l, Message.DataProposal p) throws StorageException {
         if (p.data().isEmpty()) {
-            notify(new Notification.DropProposal(ProposalDropReason.NO_DATA));
+            reject(DataDropReason.NO_DATA);
             return;
         }
         // Config change may have removed this leader — check before appending.
         if (!membership.isMember(id)) {
-            notify(new Notification.DropProposal(ProposalDropReason.REMOVED_FROM_CLUSTER));
+            reject(DataDropReason.REMOVED_FROM_CLUSTER);
             return;
         }
         // During transfer, the leader freezes to let the transferee catch up.
         if (l.isLeaderTransferInProgress()) {
-            notify(new Notification.DropProposal(ProposalDropReason.LEADER_TRANSFER_IN_PROGRESS));
+            reject(DataDropReason.LEADER_TRANSFER_IN_PROGRESS);
             return;
         }
         if (!appendProposalEntries(l, p.data())) {
-            notify(new Notification.DropProposal(ProposalDropReason.EXCEEDS_UNCOMMITTED_SIZE));
+            reject(DataDropReason.EXCEEDS_UNCOMMITTED_SIZE);
             return;
         }
         broadcastAppend(l);
 
     }
 
-
-    private boolean canForwardProposal(boolean hasLeader) {
+    private boolean canForwardDataProposal(boolean hasLeader) {
         if (!hasLeader) {
-            notify(new Notification.DropProposal(ProposalDropReason.NO_LEADER));
+            reject(DataDropReason.NO_LEADER);
             return false;
         }
 
         if (config.proposalHandleMode() == ProposalHandleMode.DROP) {
-            notify(new Notification.DropProposal(ProposalDropReason.FORWARDING_DISABLED));
+            reject(DataDropReason.FORWARDING_DISABLED);
+            return false;
+        }
+
+        return true;
+    }
+
+
+    private boolean canForwardMembershipChangeProposal(boolean hasLeader) {
+        if (!hasLeader) {
+            reject(MembershipChangeDropReason.NO_LEADER);
+            return false;
+        }
+
+        if (config.proposalHandleMode() == ProposalHandleMode.DROP) {
+            reject(MembershipChangeDropReason.FORWARDING_DISABLED);
             return false;
         }
 
@@ -1421,7 +1451,7 @@ public class Raft {
      * @param p the incoming data proposal
      */
     private void handleProposal(Follower f, Message.DataProposal p) {
-        if (!canForwardProposal(f.hasLeader())) {
+        if (!canForwardDataProposal(f.hasLeader())) {
             return;
         }
 
@@ -1437,19 +1467,11 @@ public class Raft {
      * @param p the incoming data proposal
      */
     private void handleProposal(Learner l, Message.DataProposal p) {
-        if (!canForwardProposal(l.hasLeader())) {
+        if (!canForwardDataProposal(l.hasLeader())) {
             return;
         }
 
         send(new Message.DataProposal(l.leaderId(), id, p.data()));
-    }
-
-    /**
-     * Drops a proposal because this node has no leader — used by Candidate
-     * and PreCandidate, which are mid-election and can't serve proposals.
-     */
-    private void dropProposal(ProposalDropReason reason) {
-        notify(new Notification.DropProposal(reason));
     }
 
     // ────────────────────── LOG REPLICATION ──────────────────────
@@ -2959,7 +2981,7 @@ public class Raft {
         }
 
         if (membership.isJoint()) {
-            dropProposal(ProposalDropReason.IN_JOINT_CONSENSUS);
+            reject(MembershipChangeDropReason.ENTER_WHILE_IN_JOINT_CONSENSUS);
             return;
         }
         var membershipChangeIndex = log.lastIndex() + 1;
@@ -2995,7 +3017,7 @@ public class Raft {
         }
 
         if (!membership.isJoint()) {
-            dropProposal(ProposalDropReason.NOT_IN_JOINT_CONSENSUS);
+            reject(MembershipChangeDropReason.LEAVE_WHILE_NOT_IN_JOINT_CONSENSUS);
             return;
         }
 
@@ -3004,7 +3026,7 @@ public class Raft {
     }
 
     private void handleMembershipChange(Follower f, Message.MembershipChangeProposal mcp) throws StorageException {
-        if (!canForwardProposal(f.hasLeader())) {
+        if (!canForwardMembershipChangeProposal(f.hasLeader())) {
             return;
         }
 
@@ -3012,11 +3034,27 @@ public class Raft {
     }
 
     private void handleMembershipChange(Learner l, Message.MembershipChangeProposal mcp) throws StorageException {
-        if (!canForwardProposal(l.hasLeader())) {
+        if (!canForwardMembershipChangeProposal(l.hasLeader())) {
             return;
         }
 
         step(new Message.MembershipChangeProposal(l.leaderId(), id, mcp.membershipChanges()));
+    }
+
+    private void handleLeaveJoint(Follower f) throws StorageException {
+        if (!canForwardMembershipChangeProposal(f.hasLeader())) {
+            return;
+        }
+
+        step(new Message.LeaveJointProposal(f.leaderId(), id));
+    }
+
+    private void handleLeaveJoint(Learner l) throws StorageException {
+        if (!canForwardMembershipChangeProposal(l.hasLeader())) {
+            return;
+        }
+
+        step(new Message.LeaveJointProposal(l.leaderId(), id));
     }
 
     /**
@@ -3043,17 +3081,17 @@ public class Raft {
         var progress = l.progress(id);
 
         if (progress == null) {
-            dropProposal(ProposalDropReason.NO_LEADER);
+            reject(MembershipChangeDropReason.NO_LEADER);
             return false;
         }
 
         if (l.isLeaderTransferInProgress()) {
-            dropProposal(ProposalDropReason.LEADER_TRANSFER_IN_PROGRESS);
+            reject(MembershipChangeDropReason.LEADER_TRANSFER_IN_PROGRESS);
             return false;
         }
 
         if (!l.canAcceptMembershipChange(log.applied())) {
-            dropProposal(ProposalDropReason.MEMBERSHIP_CHANGE_PENDING);
+            reject(MembershipChangeDropReason.MEMBERSHIP_CHANGE_PENDING);
             return false;
         }
 
@@ -3083,7 +3121,7 @@ public class Raft {
             l.membershipChange(membershipChangeIndex);
             broadcastAppend(l);
         } else {
-            dropProposal(ProposalDropReason.EXCEEDS_UNCOMMITTED_SIZE);
+            reject(MembershipChangeDropReason.EXCEEDS_UNCOMMITTED_SIZE);
         }
     }
 
@@ -3436,7 +3474,7 @@ public class Raft {
      */
     private void handleReadIndex(Follower f, Message.ReadIndex ri) {
         if (!f.hasLeader()) {
-            // TODO: notify the application that the read cannot be served
+            reject(ReadDropReason.NO_LEADER);
             return;
         }
 
@@ -3452,7 +3490,7 @@ public class Raft {
      */
     private void handleReadIndex(Learner l, Message.ReadIndex ri) {
         if (!l.hasLeader()) {
-            // TODO: notify the application that the read cannot be served
+            reject(ReadDropReason.NO_LEADER);
             return;
         }
         send(new Message.ReadIndex(l.leaderId(), id));
@@ -3573,7 +3611,7 @@ public class Raft {
         appliedTo(index, size);
         if (membership.isJoint() && membership.transition() == MembershipTransition.JOINT_AUTO && l.canAcceptMembershipChange(index)) {
             try {
-                step(new Message.LeaveJointProposal());
+                step(new Message.LeaveJointProposal(id, id));
             } catch (StorageException s) {
                 // Storage failure during auto-leave. The cluster remains in
                 // joint consensus. The next appliedTo call will retry.
