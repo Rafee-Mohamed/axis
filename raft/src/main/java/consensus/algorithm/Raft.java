@@ -8,6 +8,7 @@ import consensus.engine.PersistentState;
 import consensus.engine.VolatileState;
 import consensus.storage.*;
 
+import java.lang.reflect.Member;
 import java.util.*;
 import java.util.function.Function;
 import java.util.random.RandomGenerator;
@@ -116,6 +117,34 @@ public class Raft {
             default -> null;
         };
         return new VolatileState(role.type(), Optional.ofNullable(leaderId));
+    }
+
+    public long commitIndex() {
+        return log.committed();
+    }
+
+    public long appliedIndex() {
+        return log.applied();
+    }
+
+    public MembershipConfig membership() {
+        return membership;
+    }
+
+    public Optional<Map<NodeId, PeerProgress>> peerProgress() {
+        if (role instanceof Leader l) {
+            return Optional.of(l.peerProgress());
+        }
+
+        return Optional.empty();
+    }
+
+    public Optional<NodeId> leaderTransferee() {
+        if (role instanceof Leader l) {
+           return l.transferTarget();
+        }
+
+        return Optional.empty();
     }
 
     public CheckpointState checkpointState() {

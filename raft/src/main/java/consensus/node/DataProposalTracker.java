@@ -373,4 +373,19 @@ public class DataProposalTracker<T extends TrackablePayload<ID>, ID> {
 
         pending.clear();
     }
+
+    public void failAll(Throwable t) {
+        for (var future: pending.values()) {
+            future.completeExceptionally(t);
+        }
+
+        pending.clear();
+
+        for (var confirmedProposal: confirmed) {
+            confirmedProposal.future().completeExceptionally(t);
+        }
+
+        confirmed.clear();
+    }
+
 }

@@ -1,8 +1,6 @@
 package consensus.engine;
 
-import consensus.algorithm.Raft;
-import consensus.algorithm.RaftState;
-import consensus.algorithm.Rejection;
+import consensus.algorithm.*;
 import consensus.config.RaftConfig;
 import consensus.membership.MembershipConfig;
 import consensus.message.Message;
@@ -10,8 +8,7 @@ import consensus.storage.Entry;
 import consensus.storage.LogStorage;
 import consensus.storage.StorageException;
 
-import java.util.ArrayList;
-import java.util.Optional;
+import java.util.*;
 import java.util.random.RandomGenerator;
 
 public class RaftEngine {
@@ -173,6 +170,51 @@ public class RaftEngine {
                 responsesAfterPersist,
                 applyResponse
         ));
+    }
+
+    public Status status() {
+        var persistentState = raft.persistentState();
+        var volatileState = raft.volatileState();
+        var commitIndex = raft.commitIndex();
+        var appliedIndex = raft.appliedIndex();
+        var id = raft.id();
+        var transferee = raft.leaderTransferee();
+        var membership = raft.membership();
+        var peerProgress = raft.peerProgress();
+        var peerStatus = peerProgress.map(this::getNodeIdPeerStatusMap);
+
+
+        return new Status(
+                id,
+                persistentState.term(),
+                persistentState.votedFor(),
+                volatileState.role(),
+                volatileState.leaderId(),
+                commitIndex,
+                appliedIndex,
+                transferee,
+                membership,
+                peerStatus
+        );
+    }
+
+    private Map<NodeId, Status.PeerStatus> getNodeIdPeerStatusMap(Map<NodeId, PeerProgress> pp) {
+            var progressStatus = new HashMap<NodeId, Status.PeerStatus>(pp.size());
+            for (var entry: pp.entrySet()) {
+                var p = entry.getValue();
+                progressStatus.put(
+                        entry.getKey(),
+                        new Status.PeerStatus(
+                                p.match(),
+                                p.next(),
+                                p.sentCommit(),
+                                p.state(),
+                                p.isActive()
+                        )
+                );
+            }
+
+        return Collections.unmodifiableMap(progressStatus);
     }
 
 

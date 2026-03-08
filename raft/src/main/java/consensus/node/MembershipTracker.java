@@ -187,4 +187,9 @@ public class MembershipTracker {
         pending.get().completeExceptionally(new StateChangeException(volatileState.get()));
         pending = Optional.empty();
     }
+
+    public void failAll(Throwable t) {
+        pending.ifPresent(f -> f.completeExceptionally(t));
+        confirmed.ifPresent(f -> f.completeExceptionally(t));
+    }
 }

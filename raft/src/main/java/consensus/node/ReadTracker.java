@@ -344,4 +344,17 @@ public class ReadTracker {
             Objects.requireNonNull(pending.poll()).complete(null);
         }
     }
+
+
+    public void failAll(Throwable t) {
+        for (var pendingRead: pending) {
+            pendingRead.completeExceptionally(t);
+        }
+        pending.clear();
+
+        for (var confirmedRead: confirmed) {
+            confirmedRead.future().completeExceptionally(t);
+        }
+        confirmed.clear();
+    }
 }
