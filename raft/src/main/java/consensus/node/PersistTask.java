@@ -1,6 +1,6 @@
 package consensus.node;
 
-import consensus.algorithm.Snapshot;
+import consensus.core.Snapshot;
 import consensus.engine.CheckpointState;
 import consensus.engine.PersistentState;
 import consensus.message.Message;

@@ -1,6 +1,6 @@
 package consensus.storage;
 
-import consensus.algorithm.Snapshot;
+import consensus.core.Snapshot;
 import consensus.config.RaftLogConfig;
 
 import java.util.*;

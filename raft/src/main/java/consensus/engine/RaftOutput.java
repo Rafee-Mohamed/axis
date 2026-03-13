@@ -1,13 +1,12 @@
 package consensus.engine;
 
-import consensus.algorithm.ReadState;
-import consensus.algorithm.Snapshot;
+import consensus.protocol.read.ReadState;
+import consensus.core.Snapshot;
 import consensus.message.Message;
 import consensus.storage.Entry;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.Queue;
 
 public record RaftOutput(
         Optional<PersistentState> persistentState,

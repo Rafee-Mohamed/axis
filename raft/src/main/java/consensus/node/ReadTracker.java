@@ -1,6 +1,6 @@
 package consensus.node;
 
-import consensus.algorithm.ReadState;
+import consensus.protocol.read.ReadState;
 import consensus.engine.VolatileState;
 
 import java.util.*;

@@ -1,9 +1,9 @@
 package consensus.config;
 
-import consensus.algorithm.ElectionProtocol;
-import consensus.algorithm.LeaderLivenessPolicy;
-import consensus.algorithm.ProposalHandleMode;
-import consensus.algorithm.ReadIndexMode;
+import consensus.protocol.policy.ElectionProtocol;
+import consensus.protocol.policy.LeaderLivenessPolicy;
+import consensus.protocol.policy.ProposalHandleMode;
+import consensus.protocol.policy.ReadIndexMode;
 import consensus.engine.ExecutionModel;
 import consensus.storage.AppliableEntriesPolicy;
 

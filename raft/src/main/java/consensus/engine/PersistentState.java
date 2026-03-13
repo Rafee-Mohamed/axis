@@ -1,6 +1,6 @@
 package consensus.engine;
 
-import consensus.algorithm.NodeId;
+import consensus.core.NodeId;
 
 import java.util.Optional;
 

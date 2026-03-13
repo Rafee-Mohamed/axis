@@ -1,8 +1,13 @@
 package consensus.engine;
 
-import consensus.algorithm.*;
+import consensus.cluster.progress.ClusterProgress;
+import consensus.protocol.*;
+import consensus.protocol.rejection.Rejection;
+import consensus.cluster.progress.PeerProgress;
 import consensus.config.RaftConfig;
-import consensus.membership.MembershipConfig;
+import consensus.cluster.membership.MembershipConfig;
+import consensus.core.NodeId;
+import consensus.core.RaftState;
 import consensus.message.Message;
 import consensus.storage.Entry;
 import consensus.storage.LogStorage;
@@ -180,8 +185,9 @@ public class RaftEngine {
         var id = raft.id();
         var transferee = raft.leaderTransferee();
         var membership = raft.membership();
-        var peerProgress = raft.peerProgress();
-        var peerStatus = peerProgress.map(this::getNodeIdPeerStatusMap);
+        var peerStatus = raft.clusterProgress()
+                .map(ClusterProgress::progress)
+                .map(this::getNodeIdPeerStatusMap);
 
 
         return new Status(

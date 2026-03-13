@@ -1,17 +1,14 @@
 package consensus.node;
 
-import consensus.algorithm.NodeId;
-import consensus.algorithm.RaftState;
-import consensus.algorithm.ReadState;
-import consensus.algorithm.Rejection;
+import consensus.core.NodeId;
+import consensus.core.RaftState;
 import consensus.config.RaftConfig;
 import consensus.engine.*;
-import consensus.membership.MembershipChanges;
-import consensus.membership.MembershipConfig;
+import consensus.cluster.membership.MembershipChanges;
+import consensus.cluster.membership.MembershipConfig;
 import consensus.message.Message;
 import consensus.storage.Entry;
 import consensus.storage.LogStorage;
-import consensus.storage.Payload;
 import consensus.storage.StorageException;
 
 import java.util.*;

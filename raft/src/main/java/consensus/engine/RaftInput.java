@@ -1,12 +1,11 @@
 package consensus.engine;
 
-import consensus.membership.MembershipChanges;
+import consensus.cluster.membership.MembershipChanges;
 import consensus.message.Message;
-import consensus.algorithm.NodeId;
+import consensus.core.NodeId;
 import consensus.storage.Payload;
 
 import java.util.List;
-import java.util.Optional;
 
 public sealed interface RaftInput {
     record Tick() implements RaftInput {}

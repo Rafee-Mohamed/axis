@@ -1,10 +1,10 @@
 package consensus.storage;
 
-import consensus.algorithm.Snapshot;
-import consensus.membership.JointConfig;
-import consensus.membership.MajorityConfig;
-import consensus.membership.MembershipConfig;
-import consensus.membership.MembershipTransition;
+import consensus.core.Snapshot;
+import consensus.cluster.membership.JointConfig;
+import consensus.cluster.membership.MajorityConfig;
+import consensus.cluster.membership.MembershipConfig;
+import consensus.cluster.membership.MembershipTransition;
 import consensus.engine.PersistentState;
 
 import java.util.ArrayList;

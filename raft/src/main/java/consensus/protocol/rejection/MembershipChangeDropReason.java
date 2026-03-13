@@ -1,0 +1,11 @@
+package consensus.protocol.rejection;
+
+public enum MembershipChangeDropReason {
+    NO_LEADER,
+    LEADER_TRANSFER_IN_PROGRESS,
+    MEMBERSHIP_CHANGE_PENDING,
+    ENTER_WHILE_IN_JOINT_CONSENSUS,
+    LEAVE_WHILE_NOT_IN_JOINT_CONSENSUS,
+    EXCEEDS_UNCOMMITTED_SIZE,
+    FORWARDING_DISABLED
+}

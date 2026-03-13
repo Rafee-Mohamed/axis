@@ -1,6 +1,6 @@
 package consensus.storage;
 
-import consensus.membership.MembershipChanges;
+import consensus.cluster.membership.MembershipChanges;
 
 import java.util.List;
 

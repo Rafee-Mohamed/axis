@@ -1,10 +1,10 @@
 package consensus.message;
 
-import consensus.algorithm.ElectionCause;
-import consensus.algorithm.Snapshot;
-import consensus.membership.MembershipChanges;
+import consensus.protocol.policy.ElectionCause;
+import consensus.core.Snapshot;
+import consensus.cluster.membership.MembershipChanges;
 import consensus.storage.Entry;
-import consensus.algorithm.NodeId;
+import consensus.core.NodeId;
 import consensus.storage.Payload;
 
 import java.util.List;
@@ -494,7 +494,7 @@ public sealed interface Message {
      * (e.g., orchestrator) knows the leader is dead.</p>
      *
      * <p>Incompatible with lease-based reads — see
-     * {@link consensus.algorithm.Raft} forgetLeader methods for details.</p>
+     * {@link consensus.protocol.Raft} forgetLeader methods for details.</p>
      */
     record ForgetLeader() implements Internal {}
 

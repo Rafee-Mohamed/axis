@@ -1,6 +1,6 @@
 package consensus.config;
 
-import consensus.algorithm.LeaderLivenessPolicy;
+import consensus.protocol.policy.LeaderLivenessPolicy;
 
 public interface LeaderConfig extends PeerInflightConfig {
     long maxUncommittedSize();

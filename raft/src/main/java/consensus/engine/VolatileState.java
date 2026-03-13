@@ -1,7 +1,7 @@
 package consensus.engine;
 
-import consensus.algorithm.RoleType;
-import consensus.algorithm.NodeId;
+import consensus.protocol.role.RoleType;
+import consensus.core.NodeId;
 
 import java.util.Optional;
 

@@ -1,6 +1,5 @@
 package consensus.node;
 
-import consensus.algorithm.ReadState;
 import consensus.engine.VolatileState;
 import consensus.message.Message;
 import consensus.storage.Payload;

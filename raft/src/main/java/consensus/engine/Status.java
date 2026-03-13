@@ -1,9 +1,9 @@
 package consensus.engine;
 
-import consensus.algorithm.NodeId;
-import consensus.algorithm.ReplicationState;
-import consensus.algorithm.RoleType;
-import consensus.membership.MembershipConfig;
+import consensus.core.NodeId;
+import consensus.cluster.progress.ReplicationState;
+import consensus.protocol.role.RoleType;
+import consensus.cluster.membership.MembershipConfig;
 
 import java.util.Map;
 import java.util.Optional;

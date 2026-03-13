@@ -1,9 +1,9 @@
 package consensus.node;
 
-import consensus.algorithm.DataDropReason;
-import consensus.algorithm.MembershipChangeDropReason;
-import consensus.algorithm.ReadDropReason;
-import consensus.algorithm.Rejection;
+import consensus.protocol.rejection.DataDropReason;
+import consensus.protocol.rejection.MembershipChangeDropReason;
+import consensus.protocol.rejection.ReadDropReason;
+import consensus.protocol.rejection.Rejection;
 
 public sealed class RejectionException extends RuntimeException {
 
