@@ -7,36 +7,49 @@ import java.util.List;
 import java.util.OptionalLong;
 
 /**
- * Holds log entries and snapshot that have not yet been persisted to Storage.
+ * Holds log entries and a snapshot that have not yet been persisted
+ * to {@link LogStorage}.
  *
- * Serves two purposes:
- * 1. Holds new entries/snapshot until they're handed to Ready for persistence
- * 2. Continues holding them (marked "in progress") until persistence is confirmed,
- *    providing RaftLog with a complete view of the log
+ * <p>Serves two purposes:</p>
+ * <ol>
+ *   <li>Buffers new entries and snapshots until they are handed to
+ *       {@link consensus.engine.RaftOutput} for persistence.</li>
+ *   <li>Continues holding them (marked "in progress") until persistence
+ *       is confirmed, so {@link RaftLog} always has a complete view of
+ *       the log.</li>
+ * </ol>
  *
- * entries.get(i) has logical raft log index: offset + i
+ * <p>{@code entries.get(i)} has logical Raft log index
+ * {@code offset + i}.</p>
  */
 public class UnstableLog {
 
-    // Pending snapshot to be persisted (if any)
+    /** Pending snapshot awaiting persistence, or {@code null} if none. */
     private Snapshot snapshot;
 
-    // Entries not yet persisted to Storage
+    /** Entries not yet persisted to {@link LogStorage}. */
     private List<Entry> entries;
 
-    // Logical index of entries[0]
-    // entries.get(i).index() == offset + i
+    /**
+     * Logical index of {@code entries[0]}.
+     * {@code entries.get(i).index() == offset + i}.
+     */
     private long offset;
 
-    // Entries in range [offset, persistingUpTo) are currently being written to Storage
-    // Invariant: offset <= persistingUpTo <= offset + entries.size()
+    /**
+     * Entries in {@code [offset, persistingUpTo)} are currently being
+     * written to storage.
+     * Invariant: {@code offset <= persistingUpTo <= offset + entries.size()}.
+     */
     private long persistingUpTo;
 
-    // Whether snapshot is currently being written to Storage
+    /** Whether the snapshot is currently being written to storage. */
     boolean snapshotInProgress;
 
     /**
-     * Creates an UnstableLog starting after the last index in Storage.
+     * Creates an unstable log starting after the last persisted index.
+     *
+     * @param storageLastIndex the last index in {@link LogStorage}
      */
     public UnstableLog(long storageLastIndex) {
         this.entries = new ArrayList<>();
@@ -46,24 +59,27 @@ public class UnstableLog {
         this.snapshotInProgress = false;
     }
 
-    // ==================== Getters ====================
+    /* ==================== GETTERS ==================== */
 
     /**
      * Returns the logical index where unstable entries begin.
-     * Used by RaftLog to determine whether to read from Storage or UnstableLog.
+     *
+     * @return the offset index
      */
     public long offset() {
         return offset;
     }
 
-    // ==================== Index Queries ====================
+    /* ==================== INDEX QUERIES ==================== */
 
     /**
      * Returns the first available index if a snapshot is pending.
-     * When a snapshot exists, it will replace Storage up to snapshot.index,
-     * so the first available entry would be at snapshot.index + 1.
      *
-     * @return snapshot.index + 1 if snapshot exists, empty otherwise
+     * <p>When a snapshot exists it will replace storage up to
+     * {@code snapshot.index}, so the first available entry is at
+     * {@code snapshot.index + 1}.</p>
+     *
+     * @return {@code snapshot.index + 1} if a snapshot exists, empty otherwise
      */
     public OptionalLong firstIndex() {
         if (snapshot == null) {
@@ -75,9 +91,12 @@ public class UnstableLog {
 
     /**
      * Returns the last index in the unstable log.
-     * Entries take priority over snapshot since they represent newer state.
      *
-     * @return last entry index if entries exist, snapshot.index if only snapshot exists, empty otherwise
+     * <p>Entries take priority over the snapshot since they represent
+     * newer state.</p>
+     *
+     * @return last entry index, or snapshot index if only a snapshot
+     *         exists, or empty if both are absent
      */
     public OptionalLong lastIndex() {
         if (!entries.isEmpty())
@@ -90,12 +109,14 @@ public class UnstableLog {
     }
 
     /**
-     * Returns the term at the given index if it exists in unstable.
-     * Checks snapshot first (for matching index), then entries.
-     * Used by RaftLog to avoid disk reads when entry is still in memory.
+     * Returns the term at the given index if it exists in the unstable log.
+     *
+     * <p>Checks the snapshot first (for a matching index), then entries.
+     * Used by {@link RaftLog} to avoid storage reads when the entry is
+     * still in memory.</p>
      *
      * @param index the log index to query
-     * @return term at index if found, empty otherwise
+     * @return the term at that index, or empty if not found
      */
     public OptionalLong term(long index) {
         // Check if index matches snapshot index
@@ -112,14 +133,15 @@ public class UnstableLog {
         return OptionalLong.of(entries.get((int) (index - offset)).term());
     }
 
-    // ==================== Entry and Snapshot Access for Ready ====================
+    /* ==================== OUTPUT ACCESS ==================== */
 
     /**
-     * Returns entries that are NOT yet being persisted.
-     * These should be included in the next Ready for the application to persist.
-     * Entries already marked in-progress (via acceptInProgress) are excluded.
+     * Returns entries that are not yet being persisted.
      *
-     * @return list of entries pending persistence, empty list if none
+     * <p>Entries already marked in-progress via {@link #acceptInProgress()}
+     * are excluded.</p>
+     *
+     * @return entries pending persistence, or an empty list
      */
     public List<Entry> nextEntriesToPersist() {
         var inProgressCount = (int) (persistingUpTo - offset);
@@ -130,20 +152,30 @@ public class UnstableLog {
         return entries.subList(inProgressCount, entries.size());
     }
 
+    /**
+     * Returns the number of entries not yet marked in-progress.
+     *
+     * @return count of entries pending persistence
+     */
     public long entriesToPersistCount() {
         var inProgressCount = (int) (persistingUpTo - offset);
         return Math.max(0, entries.size() - inProgressCount);
     }
 
+    /**
+     * Returns the total number of entries in the unstable log.
+     *
+     * @return total entry count (including in-progress)
+     */
     public long totalEntriesCount() {
         return entries.size();
     }
 
     /**
-     * Returns the snapshot if it's NOT yet being persisted.
-     * Returns null if no snapshot exists or if it's already in-progress.
+     * Returns the snapshot if it is not yet being persisted.
      *
-     * @return pending snapshot, or null
+     * @return the pending snapshot, or {@code null} if none or already
+     *         in-progress
      */
     public Snapshot nextSnapshot() {
         if (snapshot == null || snapshotInProgress)
@@ -152,11 +184,14 @@ public class UnstableLog {
         return snapshot;
     }
 
-    // ==================== Progress Tracking ====================
+    /* ==================== PROGRESS TRACKING ==================== */
 
     /**
-     * Marks all current entries and snapshot as "in progress" (being persisted).
-     * Called when Ready is generated - these won't be returned by nextEntries/nextSnapshot again.
+     * Marks all current entries and the snapshot as in-progress.
+     *
+     * <p>Once marked, they will not be returned by
+     * {@link #nextEntriesToPersist()} or {@link #nextSnapshot()} again
+     * until new entries or a new snapshot arrive.</p>
      */
     public void acceptInProgress() {
         if (!entries.isEmpty())
@@ -167,15 +202,16 @@ public class UnstableLog {
     }
 
     /**
-     * Acknowledges that entries up to (index, term) have been persisted to Storage.
-     * Removes acknowledged entries from unstable since they now exist in Storage.
+     * Acknowledges that entries up to ({@code term}, {@code index}) have
+     * been persisted to storage.
      *
-     * The term parameter guards against stale acknowledgements: if the log was
-     * replaced (e.g., by a new leader) while persistence was in-flight, the term
-     * won't match and the stale ack is safely ignored.
+     * <p>Removes acknowledged entries from the unstable log. The
+     * {@code term} parameter guards against stale acknowledgements: if
+     * the log was replaced (e.g., by a new leader) while persistence was
+     * in-flight, the term will not match and the stale ack is ignored.</p>
      *
-     * @param term the term of the last persisted entry
-     * @param index the last persisted entry index
+     * @param term  the term of the last persisted entry
+     * @param index the index of the last persisted entry
      */
     public void stableTo(long term, long index) {
         var entryTerm = term(index);
@@ -200,8 +236,8 @@ public class UnstableLog {
     }
 
     /**
-     * Acknowledges that the snapshot has been persisted to Storage.
-     * Clears the snapshot from unstable if the index matches.
+     * Acknowledges that the snapshot has been persisted to storage.
+     * Clears the snapshot if the index matches.
      *
      * @param index the persisted snapshot index
      */
@@ -212,11 +248,20 @@ public class UnstableLog {
         }
     }
 
-    // ==================== Mutation ====================
+    /* ==================== MUTATION ==================== */
 
     /**
      * Appends entries, truncating any conflicting entries first.
-     * Called when receiving entries from leader or proposing locally.
+     *
+     * <p>Three cases are handled:</p>
+     * <ol>
+     *   <li>Appending at the end - entries are simply added.</li>
+     *   <li>Replacing the entire unstable log - offset is reset.</li>
+     *   <li>Partial overlap - conflicting suffix is truncated, then
+     *       new entries are appended.</li>
+     * </ol>
+     *
+     * @param newEntries entries to append
      */
     public void append(List<Entry> newEntries) {
         if (newEntries.isEmpty())
@@ -247,8 +292,9 @@ public class UnstableLog {
 
 
     /**
-     * Restores state from a snapshot (typically received from leader).
-     * Clears all entries and sets the snapshot.
+     * Restores state from a snapshot, clearing all entries.
+     *
+     * @param snapshotToRestore the snapshot to restore from
      */
     public void restore(Snapshot snapshotToRestore) {
         offset = snapshotToRestore.index() + 1;
@@ -259,13 +305,12 @@ public class UnstableLog {
     }
 
     /**
-     * Returns a copy of entries in the range [low, high).
-     * Used by RaftLog when reading entries that span both Storage and UnstableLog.
+     * Returns a copy of entries in the half-open range {@code [low, high)}.
      *
-     * @param low start index (inclusive)
+     * @param low  start index (inclusive)
      * @param high end index (exclusive)
-     * @return copy of entries in range
-     * @throws IllegalArgumentException if range is invalid or out of bounds
+     * @return copy of entries in the range
+     * @throws IllegalArgumentException if the range is invalid or out of bounds
      */
     public List<Entry> slice(long low, long high) throws IllegalArgumentException {
         checkIndexBounds(low, high);
@@ -275,7 +320,14 @@ public class UnstableLog {
     }
 
 
-    private void checkIndexBounds(long low, long high) throws IllegalArgumentException{
+    /**
+     * Validates that {@code [low, high)} is within bounds.
+     *
+     * @param low  start index (inclusive)
+     * @param high end index (exclusive)
+     * @throws IllegalArgumentException if the range is invalid or out of bounds
+     */
+    private void checkIndexBounds(long low, long high) throws IllegalArgumentException {
         if (low > high)
             throw new IllegalArgumentException("Invalid Range: low=" + low + " high=" + high);
 
@@ -296,6 +348,11 @@ public class UnstableLog {
                 '}';
     }
 
+    /**
+     * Returns whether the snapshot is currently being persisted.
+     *
+     * @return {@code true} if snapshot persistence is in progress
+     */
     public boolean snapshotInProgress() {
         return snapshotInProgress;
     }

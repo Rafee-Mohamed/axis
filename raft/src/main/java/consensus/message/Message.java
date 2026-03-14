@@ -11,43 +11,54 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * All messages in the Raft protocol — both network RPCs between nodes and
- * local triggers within a single node.
+ * All messages in the Raft protocol - both peer messages sent between
+ * nodes over the network and internal messages that stay local to a
+ * single node.
  *
- * <p>Every network message carries {@code to}, {@code from}, and {@code term}.
- * Local messages omit routing fields since they never leave the node.</p>
+ * <p>Every peer message carries {@code to}, {@code from}, and
+ * {@code term}. Internal messages omit routing fields since they
+ * never leave the node.</p>
  */
 public sealed interface Message {
 
+    /**
+     * A message that stays local to the node - never sent over the
+     * network. Used for ticks, persistence feedback, state machine
+     * feedback, and operator commands.
+     */
     sealed interface Internal extends Message {}
-    sealed interface Peer extends Message {}
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // REPLICATION MESSAGES
-    // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Leader → Follower/Learner: replicate log entries (AppendEntries RPC).
+     * A message exchanged between nodes over the network. Carries
+     * at least {@code to} and {@code from} fields for routing.
+     */
+    sealed interface Peer extends Message {}
+
+    /* ==================== REPLICATION ==================== */
+
+    /**
+     * Leader -> Follower/Learner: replicate log entries.
      *
-     * <p>The leader sends a batch of entries along with the entry immediately
-     * before them ({@code prevLogIndex}/{@code prevLogTerm}) so the receiver
-     * can verify log consistency before appending. Also carries the leader's
-     * commit index so followers can advance their own.</p>
+     * <p>The leader sends a batch of entries along with the entry
+     * immediately before them ({@code prevLogIndex}/{@code prevLogTerm})
+     * so the receiver can verify log consistency before appending. Also
+     * carries the leader's commit index so followers can advance their
+     * own.</p>
      *
-     * <p>When {@code entries} is empty, this acts as a probe — the leader
-     * sends it to deliver its commit index, or to unblock a stalled peer
-     * whose inflight buffer is full.</p>
+     * <p>When {@code entries} is empty, this acts as a probe - the
+     * leader sends it to deliver its commit index, or to unblock a
+     * stalled peer whose inflight buffer is full.</p>
      *
      * @param to            the target peer
      * @param from          the leader sending this message
      * @param term          the leader's current term
-     * @param prevLogTerm   term of the entry at prevLogIndex (for log consistency check)
-     * @param prevLogIndex  index of the entry immediately before the new ones
-     * @param entries       log entries to append (empty for probe/heartbeat)
-     * @param leaderCommit  the leader's commit index — receiver advances its
-     *                      own commit to {@code min(leaderCommit, lastNewEntryIndex)}
-     *
-     * @see <a href="https://raft.github.io/raft.pdf">Raft paper §5.3 — AppendEntries RPC</a>
+     * @param prevLogTerm   term of the entry at prevLogIndex
+     * @param prevLogIndex  index of the entry immediately before the
+     *                      new ones
+     * @param entries       log entries to append (empty for probe)
+     * @param leaderCommit  the leader's commit index - receiver advances
+     *                      its own commit to
+     *                      {@code min(leaderCommit, lastNewEntryIndex)}
      */
     record AppendEntries(
             NodeId to,
@@ -61,46 +72,49 @@ public sealed interface Message {
     }
 
     /**
-     * Follower/Learner → Leader: response to AppendEntries or InstallSnapshot.
+     * Follower/Learner -> Leader: response to
+     * {@link AppendEntries} or {@link InstallSnapshot}.
      *
-     * <p>This message serves double duty — it's the response for both
-     * AppendEntries and InstallSnapshot. The fields have different meanings
-     * depending on the outcome:</p>
+     * <p>This message serves double duty - it is the response for both
+     * AppendEntries and InstallSnapshot. The fields have different
+     * meanings depending on the outcome:</p>
      *
      * <p><b>On success</b> ({@code success = true}):</p>
      * <ul>
-     *   <li>{@code index}: the highest log index known to be replicated on
-     *       this follower. For AppendEntries, this is the index of the last
-     *       appended entry. For InstallSnapshot, this is either
+     *   <li>{@code index}: the highest log index known to be replicated
+     *       on this follower. For AppendEntries this is the index of the
+     *       last appended entry. For InstallSnapshot this is either
      *       {@code lastIndex()} (snapshot applied) or {@code committed}
-     *       (snapshot was stale/redundant). The leader uses this to advance
-     *       the peer's match index.</li>
+     *       (snapshot was stale/redundant). The leader uses this to
+     *       advance the peer's match index.</li>
      *   <li>{@code termHint} and {@code indexHint}: unused (zero).</li>
      * </ul>
      *
      * <p><b>On rejection</b> ({@code success = false}):</p>
      * <ul>
-     *   <li>{@code index}: the prevLogIndex that was rejected — tells the
-     *       leader which AppendEntries failed.</li>
-     *   <li>{@code termHint}: the term of the follower's entry at the hint
-     *       index. The leader uses this together with indexHint to skip
-     *       backward efficiently (follower-side optimization).</li>
-     *   <li>{@code indexHint}: the highest index where the follower has a
-     *       term ≤ the leader's prevLogTerm. Lets the leader jump backward
-     *       past entire term ranges instead of probing one index at a time.</li>
+     *   <li>{@code index}: the prevLogIndex that was rejected - tells
+     *       the leader which AppendEntries failed.</li>
+     *   <li>{@code termHint}: the term of the follower's entry at the
+     *       hint index. The leader uses this together with indexHint to
+     *       skip backward efficiently.</li>
+     *   <li>{@code indexHint}: the highest index where the follower has
+     *       a term &lt;= the leader's prevLogTerm. Lets the leader jump
+     *       backward past entire term ranges instead of probing one
+     *       index at a time.</li>
      * </ul>
      *
      * @param to        the leader that sent the original request
      * @param from      the follower/learner responding
-     * @param term      the responder's current term (if higher than the leader's,
-     *                  the leader steps down)
-     * @param success   true if log consistency check passed, false if logs diverged
-     * @param index     replicated index (success) or rejected prevLogIndex (failure)
-     * @param termHint  follower's conflicting term for log divergence optimization
-     * @param indexHint follower's suggested backtrack index for log divergence optimization
-     *
-     * @see <a href="https://raft.github.io/raft.pdf">Raft paper §5.3 — AppendEntries RPC response.
-     *      Also serves as the response for InstallSnapshot RPC (§7)</a>
+     * @param term      the responder's current term (if higher than the
+     *                  leader's, the leader steps down)
+     * @param success   true if log consistency check passed, false if
+     *                  logs diverged
+     * @param index     replicated index (success) or rejected
+     *                  prevLogIndex (failure)
+     * @param termHint  follower's conflicting term for log divergence
+     *                  optimization
+     * @param indexHint follower's suggested backtrack index for log
+     *                  divergence optimization
      */
     record AppendEntriesResponse(
             NodeId to,
@@ -114,17 +128,50 @@ public sealed interface Message {
     }
 
     /**
-     * Leader → Follower/Learner: lightweight heartbeat (no entries).
+     * Leader -> Follower/Learner: install a snapshot.
      *
-     * <p>Carries only the leader's commit index. Resets the follower's
-     * election timer and allows it to advance its commit index. Separate
-     * from AppendEntries to keep heartbeats cheap — the leader sends these
-     * at a faster cadence than full replication rounds.</p>
+     * <p>Sent when a peer is too far behind for log-based replication -
+     * the entries it needs have been compacted away. The snapshot
+     * contains the full state machine data, the last included entry's
+     * term/index, and the cluster membership at that point.</p>
+     *
+     * <p>The receiver responds with an {@link AppendEntriesResponse}
+     * (not a separate message type) - success with its new last index
+     * if restored, or success with its committed index if the snapshot
+     * was redundant.</p>
+     *
+     * @param to       the target peer
+     * @param from     the leader
+     * @param term     the leader's current term
+     * @param snapshot the full snapshot (state machine data + metadata
+     *                 + membership)
+     */
+    record InstallSnapshot(
+            NodeId to,
+            NodeId from,
+            long term,
+            Snapshot snapshot
+    ) implements Peer {
+    }
+
+    /* ==================== HEARTBEAT ==================== */
+
+    /**
+     * Leader -> Follower/Learner: lightweight heartbeat (no entries).
+     *
+     * <p>Carries the leader's commit index and a sequence number for
+     * linearizable read tracking. Resets the follower's election timer
+     * and allows it to advance its commit index. Separate from
+     * {@link AppendEntries} to keep heartbeats cheap - the leader
+     * sends these at a faster cadence than full replication rounds.</p>
      *
      * @param to           the target peer
      * @param from         the leader
      * @param term         the leader's current term
      * @param leaderCommit the leader's commit index
+     * @param sequence     heartbeat sequence number for read index
+     *                     tracking - echoed back in
+     *                     {@link HeartbeatResponse#sequence}
      */
     record Heartbeat(
             NodeId to,
@@ -136,16 +183,20 @@ public sealed interface Message {
     }
 
     /**
-     * Follower/Learner → Leader: response to Heartbeat.
+     * Follower/Learner -> Leader: response to {@link Heartbeat}.
      *
-     * <p>Confirms the follower is alive. The leader uses these to track
-     * which peers are active for quorum checks. Also triggers the leader
-     * to resume sending to peers stuck in Probe (paused waiting for a
-     * response).</p>
+     * <p>Confirms the follower is alive. The leader uses these to
+     * track which peers are active for quorum checks. Also triggers
+     * the leader to resume sending to peers stuck in Probe state.
+     * The echoed {@code sequence} is used by
+     * {@link consensus.protocol.read.ReadIndex} to correlate acks
+     * to specific heartbeat rounds for linearizable reads.</p>
      *
-     * @param to   the leader
-     * @param from the follower/learner responding
-     * @param term the responder's current term
+     * @param to       the leader
+     * @param from     the follower/learner responding
+     * @param term     the responder's current term
+     * @param sequence the heartbeat sequence echoed from the original
+     *                 {@link Heartbeat}
      */
     record HeartbeatResponse(
             NodeId to,
@@ -155,78 +206,29 @@ public sealed interface Message {
     ) implements Peer {
     }
 
-    /**
-     * Leader → Follower/Learner: install a snapshot (InstallSnapshot RPC).
-     *
-     * <p>Sent when a peer is too far behind for log-based replication — the
-     * entries it needs have been compacted away. The snapshot contains the
-     * full state machine data, the last included entry's term/index, and the
-     * cluster membership at that point.</p>
-     *
-     * <p>The receiver responds with an {@link AppendEntriesResponse} (not a
-     * separate message type) — success with its new last index if restored,
-     * or success with its committed index if the snapshot was redundant.</p>
-     *
-     * @param to       the target peer
-     * @param from     the leader
-     * @param term     the leader's current term
-     * @param snapshot the full snapshot (state machine data + metadata + membership)
-     *
-     * @see <a href="https://raft.github.io/raft.pdf">Raft paper §7 — InstallSnapshot RPC</a>
-     */
-    record InstallSnapshot(
-            NodeId to,
-            NodeId from,
-            long term,
-            Snapshot snapshot
-    ) implements Peer {
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // ELECTION MESSAGES
-    // ═══════════════════════════════════════════════════════════════════════════
+    /* ==================== ELECTION ==================== */
 
     /**
-     * Candidate → All voters: request a vote (RequestVote RPC).
+     * Candidate -> All voters: request a vote.
      *
      * <p>Carries the candidate's last log entry (term + index) so voters
-     * can enforce the "at least as up-to-date" rule — a voter only grants
-     * its vote if the candidate's log is not behind its own. This prevents
-     * electing a leader that would need to overwrite committed entries.</p>
+     * can enforce the "at least as up-to-date" rule - a voter only
+     * grants its vote if the candidate's log is not behind its own.
+     * This prevents electing a leader that would need to overwrite
+     * committed entries.</p>
      *
-     * <p>The {@code cause} field distinguishes <b>why</b> this election is happening,
-     * which affects how voters handle the <b>leader lease check</b>:</p>
-     * <ul>
-     *   <li>{@link ElectionCause#ELECTION_TIMEOUT ELECTION_TIMEOUT} — normal election
-     *       triggered by a follower's election timer expiring. Voters that have
-     *       recently heard from a leader (within their election timeout) will
-     *       <em>reject</em> this vote to protect the active leader from disruption.
-     *       This is the lease check that prevents partitioned nodes from disrupting
-     *       the cluster.</li>
-     *   <li>{@link ElectionCause#LEADER_TRANSFER LEADER_TRANSFER} — election triggered
-     *       by a {@link TimeoutNow} from the current leader as part of a graceful
-     *       leadership transfer. Voters <em>bypass</em> the lease check and evaluate
-     *       the vote purely on term and log freshness. This is safe because the leader
-     *       itself initiated the transfer — it wants to give up leadership, so the
-     *       lease should not block the handoff.</li>
-     *   <li>{@link ElectionCause#WON_PREELECTION WON_PREELECTION} — real election
-     *       after winning a pre-vote round. Voters apply the same lease check as
-     *       {@code ELECTION_TIMEOUT}.</li>
-     *   <li>{@link ElectionCause#ELECTION_ROUND_TIMEOUT ELECTION_ROUND_TIMEOUT} —
-     *       election restarted because a Candidate's round timer expired without
-     *       a decisive result. Voters apply the same lease check as
-     *       {@code ELECTION_TIMEOUT}.</li>
-     * </ul>
+     * <p>The {@code cause} field distinguishes <b>why</b> this election
+     * is happening, which affects how voters handle the leader lease
+     * check. See {@link ElectionCause} for details.</p>
      *
      * @param to           the voter being asked
      * @param from         the candidate requesting the vote
      * @param term         the candidate's term for this election
      * @param lastLogTerm  term of the candidate's last log entry
      * @param lastLogIndex index of the candidate's last log entry
-     * @param cause        why this election was initiated — controls whether the
-     *                     leader lease check is enforced or bypassed
-     *
-     * @see <a href="https://raft.github.io/raft.pdf">Raft paper §5.2 — RequestVote RPC</a>
+     * @param cause        why this election was initiated - controls
+     *                     whether the leader lease check is enforced
+     *                     or bypassed
      */
     record RequestVote(
             NodeId to,
@@ -239,15 +241,13 @@ public sealed interface Message {
     }
 
     /**
-     * Voter → Candidate: response to RequestVote.
+     * Voter -> Candidate: response to {@link RequestVote}.
      *
      * @param to           the candidate that requested the vote
      * @param from         the voter responding
-     * @param term         the voter's current term (maybe higher if the
+     * @param term         the voter's current term (may be higher if the
      *                     candidate's term is stale)
      * @param voteGranted  true if the vote was granted
-     *
-     * @see <a href="https://raft.github.io/raft.pdf">Raft paper §5.2 — RequestVote RPC response</a>
      */
     record RequestVoteResponse(
             NodeId to,
@@ -258,17 +258,24 @@ public sealed interface Message {
     }
 
     /**
-     * PreCandidate → All voters: pre-vote before committing to an election.
+     * PreCandidate -> All voters: pre-election request before committing
+     * to a real election.
      *
-     * <p>Identical to {@link RequestVote} except the term is hypothetical
-     * ({@code currentTerm + 1}) — it is NOT adopted by voters. This prevents
-     * a partitioned node from inflating cluster-wide terms when it can't
-     * actually win. Only if a majority grants the pre-vote does the node
-     * proceed to a real election.</p>
+     * <p>Identical to {@link RequestVote} except the term is
+     * hypothetical ({@code currentTerm + 1}) - it is not adopted by
+     * voters. This prevents a partitioned node from inflating
+     * cluster-wide terms when it cannot actually win. Only if a quorum
+     * grants the pre-election does the node proceed to a real election
+     * as {@link consensus.protocol.role.Candidate}.</p>
+     *
+     * <p>Only used when
+     * {@link consensus.protocol.policy.ElectionProtocol#DUAL_ELECTION}
+     * is configured.</p>
      *
      * @param to           the voter being asked
      * @param from         the pre-candidate
-     * @param term         the hypothetical term (currentTerm + 1, not yet adopted)
+     * @param term         the hypothetical term (currentTerm + 1, not
+     *                     yet adopted)
      * @param lastLogTerm  term of the pre-candidate's last log entry
      * @param lastLogIndex index of the pre-candidate's last log entry
      */
@@ -282,12 +289,12 @@ public sealed interface Message {
     }
 
     /**
-     * Voter → PreCandidate: response to RequestPreVote.
+     * Voter -> PreCandidate: response to {@link RequestPreVote}.
      *
      * @param to           the pre-candidate
      * @param from         the voter responding
      * @param term         the voter's current term
-     * @param voteGranted  true if the pre-vote was granted
+     * @param voteGranted  true if the pre-election vote was granted
      */
     record RequestPreVoteResponse(
             NodeId to,
@@ -297,16 +304,16 @@ public sealed interface Message {
     ) implements Peer {
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // LEADERSHIP TRANSFER MESSAGES
-    // ═══════════════════════════════════════════════════════════════════════════
+    /* ==================== LEADERSHIP TRANSFER ==================== */
 
     /**
-     * Any node → Leader: request to transfer leadership to a specific node.
+     * Any node -> Leader: request to transfer leadership to a specific
+     * node.
      *
      * <p>The leader catches up the transferee's log, then sends it a
-     * {@link TimeoutNow} to trigger an immediate election. During transfer,
-     * the leader stops accepting proposals to let the transferee catch up.</p>
+     * {@link TimeoutNow} to trigger an immediate election. During
+     * transfer the leader stops accepting proposals to let the
+     * transferee catch up.</p>
      *
      * @param to         the current leader
      * @param from       the node requesting the transfer
@@ -320,12 +327,13 @@ public sealed interface Message {
     }
 
     /**
-     * Leader → Transferee: start an election immediately.
+     * Leader -> Transferee: start an election immediately.
      *
-     * <p>Sent once the leader confirms the transferee's log is caught up.
-     * The transferee skips the election timeout and campaigns right away.
-     * Uses a real election (not pre-vote) since we know the cluster is
-     * healthy — no need for the extra pre-vote round trip.</p>
+     * <p>Sent once the leader confirms the transferee's log is caught
+     * up. The transferee skips the election timeout and campaigns right
+     * away. Uses a direct election (not a pre-election) since the
+     * leader already verified the transferee is caught up - there is
+     * no risk of a disruptive failed election.</p>
      *
      * @param to   the transferee that should start the election
      * @param from the current leader
@@ -338,19 +346,18 @@ public sealed interface Message {
     ) implements Peer {
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // READ QUERY MESSAGES
-    // ═══════════════════════════════════════════════════════════════════════════
+    /* ==================== LINEARIZABLE READS ==================== */
 
     /**
-     * Follower → Leader: request a read index for linearizable reads.
+     * Follower -> Leader: request a read index for linearizable reads.
      *
-     * <p>The leader responds with its current commit index after confirming
-     * it still holds leadership (via a quorum check). The follower can then
-     * serve reads once it has applied entries up to that index.</p>
+     * <p>The leader responds with its current commit index after
+     * confirming it still holds leadership (via a quorum heartbeat
+     * ack). The follower can then serve reads once it has applied
+     * entries up to that index.</p>
      *
-     * @param to      the leader
-     * @param from    the follower requesting the read
+     * @param to   the leader
+     * @param from the follower requesting the read
      */
     record ReadIndex(
             NodeId to,
@@ -359,17 +366,17 @@ public sealed interface Message {
     }
 
     /**
-     * Leader → Follower: response with a committed index for a read request.
+     * Leader -> Follower: confirmed read index for a linearizable read.
      *
-     * <p>The follower can serve a linearizable read once its applied index
-     * reaches {@code readIndex}. The {@code context} is echoed back so the
-     * follower can match this response to the original request.</p>
+     * <p>The follower can serve a linearizable read once its applied
+     * index reaches {@code readIndex}.</p>
      *
      * @param to        the follower that requested the read
      * @param from      the leader
      * @param term      the leader's term
-     * @param readIndex the commit index at the time the leader confirmed its
-     *                  leadership — reads at or below this index are safe
+     * @param readIndex the commit index at the time the leader confirmed
+     *                  its leadership - reads at or below this index are
+     *                  safe
      */
     record ReadIndexResponse(
             NodeId to,
@@ -379,38 +386,18 @@ public sealed interface Message {
     ) implements Peer {
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // LOCAL MESSAGES (internal triggers, not sent over network)
-    // ═══════════════════════════════════════════════════════════════════════════
+    /* ==================== CLIENT PROPOSALS (may be forwarded to leader) ==================== */
 
     /**
-     * Internal: follower's election timeout fired — start an election.
-     *
-     * @param from this node's id
-     */
-    record TriggerElection(
-            NodeId from
-    ) implements Internal {
-    }
-
-    /**
-     * Internal: leader's heartbeat tick fired — broadcast heartbeats.
-     *
-     * @param from this node's id (the leader)
-     */
-    record TriggerHeartbeat(
-            NodeId from
-    ) implements Internal {
-    }
-
-    /**
-     * Internal: application proposes data to be replicated.
+     * Application proposes data to be replicated.
      *
      * <p>On a leader, the data is appended to the log and replicated.
      * On a follower/learner, the proposal is forwarded to the leader
-     * (if forwarding is enabled) or dropped.</p>
+     * (if {@link consensus.protocol.policy.ProposalHandleMode#FORWARD_TO_LEADER}
+     * is configured) or rejected.</p>
      *
-     * @param to   the same id when self
+     * @param to   this node's id (self-addressed when local, leader id
+     *             when forwarded)
      * @param from this node's id
      * @param data the proposed data entries
      */
@@ -422,11 +409,14 @@ public sealed interface Message {
     }
 
     /**
-     * Internal: application proposes a membership configuration change.
+     * Application proposes a membership configuration change (enter
+     * joint consensus).
      *
-     * @param from       this node's id
-     * @param from       this node's id
-     * @param membershipChanges    the membership changes to apply (add/remove voters/learners)
+     * @param to                this node's id (self-addressed when local,
+     *                          leader id when forwarded)
+     * @param from              this node's id
+     * @param membershipChanges the membership changes to apply
+     *                          (add/remove voters/learners)
      */
     record MembershipChangeProposal(
             NodeId to,
@@ -435,14 +425,55 @@ public sealed interface Message {
     ) implements Peer {
     }
 
+    /**
+     * Application proposes to leave joint consensus and finalize the
+     * membership change.
+     *
+     * @param to   this node's id (self-addressed when local, leader id
+     *             when forwarded)
+     * @param from this node's id
+     */
     record LeaveJointProposal(
             NodeId to,
             NodeId from
     ) implements Peer {}
 
+    /* ==================== INTERNAL TRIGGERS (local, never sent over network) ==================== */
+
     /**
-     * Internal: leader's check-quorum tick — verify a majority of peers
+     * Tick signal - advances all role timers by one tick. Delivered
+     * periodically by the application's ticker.
+     */
+    record Tick() implements Internal {}
+
+    /**
+     * Follower's election timeout fired - start an election campaign.
+     *
+     * @param from this node's id
+     */
+    record TriggerElection(
+            NodeId from
+    ) implements Internal {
+    }
+
+    /**
+     * Leader's heartbeat timer fired - broadcast heartbeats to all
+     * peers.
+     *
+     * @param from this node's id (the leader)
+     */
+    record TriggerHeartbeat(
+            NodeId from
+    ) implements Internal {
+    }
+
+    /**
+     * Leader's quorum-check timer fired - verify a quorum of peers
      * have been recently active, step down if not.
+     *
+     * <p>Only generated when
+     * {@link consensus.protocol.policy.LeaderLivenessPolicy#QUORUM_VERIFIED}
+     * is active.</p>
      *
      * @param from this node's id (the leader)
      */
@@ -452,13 +483,35 @@ public sealed interface Message {
     }
 
     /**
-     * Internal: transport layer reports the outcome of a snapshot delivery.
+     * Instructs a follower/learner to forget its current leader.
+     *
+     * <p>Useful when
+     * {@link consensus.protocol.policy.ElectionProtocol#DUAL_ELECTION}
+     * and
+     * {@link consensus.protocol.policy.LeaderLivenessPolicy#QUORUM_VERIFIED}
+     * are both active: followers normally reject pre-election requests
+     * if they have recently heard from the leader (lease protection).
+     * ForgetLeader clears that state so the node can grant votes
+     * immediately, enabling fast leader election when an external
+     * system (e.g. orchestrator) knows the leader is dead.</p>
+     *
+     * <p>Incompatible with
+     * {@link consensus.protocol.policy.ReadIndexMode#LEASE} - see
+     * {@link consensus.protocol.Raft} forgetLeader handling for
+     * details.</p>
+     */
+    record ForgetLeader() implements Internal {}
+
+    /* ==================== FEEDBACK (from application/transport layer) ==================== */
+
+    /**
+     * Transport layer reports the outcome of a snapshot delivery.
      *
      * <p>Sent by the application/transport layer on the same node that
-     * initiated the {@link InstallSnapshot}. While the snapshot is in flight,
-     * the peer is in Snapshot state and all AppendEntries are paused. This
-     * feedback unblocks the peer by transitioning it back to Probe (paused,
-     * waiting for the peer's AppendEntriesResponse or next heartbeat).</p>
+     * initiated the {@link InstallSnapshot}. While the snapshot is in
+     * flight the peer is in Snapshot state and all AppendEntries are
+     * paused. This feedback unblocks the peer by transitioning it back
+     * to Probe.</p>
      *
      * @param peer    the peer the snapshot was sent to
      * @param success true if delivered, false if delivery failed
@@ -470,14 +523,14 @@ public sealed interface Message {
     }
 
     /**
-     * Internal: transport layer reports a peer is unreachable.
+     * Transport layer reports a peer is unreachable.
      *
      * <p>Sent when the transport fails to deliver a message (connection
-     * refused, timeout, etc.). If the peer was in Replicate state, it is
+     * refused, timeout, etc.). If the peer was in Replicate state it is
      * demoted to Probe since the pipelined messages were likely lost.
      * Probe and Snapshot states are unaffected.</p>
      *
-     * @param peer the peer that couldn't be reached
+     * @param peer the peer that could not be reached
      */
     record PeerUnreachable(
             NodeId peer
@@ -485,29 +538,14 @@ public sealed interface Message {
     }
 
     /**
-     * Local message: instructs a follower/learner to forget its current leader.
-     *
-     * <p>Useful with PreVote + CheckQuorum: followers normally reject pre-votes
-     * if they've recently heard from the leader (vote rejection protects the
-     * leader's lease). ForgetLeader clears that memory so the node can grant
-     * votes immediately, enabling fast leader election when an external system
-     * (e.g., orchestrator) knows the leader is dead.</p>
-     *
-     * <p>Incompatible with lease-based reads — see
-     * {@link consensus.protocol.Raft} forgetLeader methods for details.</p>
-     */
-    record ForgetLeader() implements Internal {}
-
-
-    /**
-     * Local message: log entries, hard state, and/or snapshot have been
-     * persisted to stable storage.
+     * Log entries, hard state, and/or snapshot have been persisted to
+     * stable storage.
      *
      * <p>Entry stability is <b>term-gated</b>: only applied when
-     * {@code term == currentTerm}. If the term changed, the entries may
-     * have been overwritten by a new leader (ABA problem). Snapshot
-     * application is <b>not term-gated</b> — snapshots are committed
-     * state, immutable across terms.</p>
+     * {@code term == currentTerm}. If the term changed the entries may
+     * have been overwritten by a new leader. Snapshot application is
+     * <b>not term-gated</b> - snapshots are committed state, immutable
+     * across terms.</p>
      *
      * @param term     the Raft term when the persist was requested
      * @param logTerm  term of the last persisted entry
@@ -522,26 +560,34 @@ public sealed interface Message {
     ) implements Internal {}
 
     /**
-     * Local message: committed entries have been applied to the state machine.
+     * Committed entries have been applied to the state machine.
      *
-     * <p>Entries are echoed back so Raft can extract the last applied index
-     * and total size. No term field — committed entries are term-independent,
-     * permanent regardless of leadership changes.</p>
+     * <p>Entries are echoed back so Raft can extract the last applied
+     * index and total size. No term field - committed entries are
+     * term-independent, permanent regardless of leadership changes.</p>
      *
-     * @param entries the committed entries that were applied (echoed back)
+     * @param entries the committed entries that were applied
      */
     record AppliedToStateMachine(
             List<Entry> entries
     ) implements Internal {
     }
 
-    record Tick() implements Internal {};
-
+    /**
+     * Application requests a membership change to be applied to the
+     * protocol state (called after the membership change entry is
+     * committed).
+     *
+     * @param changes the membership changes to apply
+     */
     record ApplyMembershipChange(
             MembershipChanges changes
     ) implements Internal {}
 
+    /**
+     * Application requests leaving joint consensus (called after the
+     * leave-joint entry is committed).
+     */
     record ApplyLeaveJoint() implements Internal {}
-
 
 }

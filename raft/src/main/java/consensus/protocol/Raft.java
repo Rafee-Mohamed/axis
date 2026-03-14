@@ -17,36 +17,92 @@ import consensus.storage.*;
 
 import consensus.config.RaftConfig;
 import consensus.message.Message;
-import consensus.engine.CheckpointState;
-import consensus.engine.PersistentState;
-import consensus.engine.VolatileState;
 
 import java.util.*;
 import java.util.function.Function;
 import java.util.random.RandomGenerator;
 
+/**
+ * Core Raft consensus protocol state machine.
+ *
+ * <p>Processes {@link Message} inputs via {@link #step(Message)} and
+ * buffers output (messages to send, state to persist, entries to apply).
+ * The {@link consensus.engine.RaftEngine} drives this class in a
+ * step/advance loop, draining the buffered output via the state
+ * accessor and {@code drain*} methods to build
+ * {@link consensus.engine.RaftOutput}.</p>
+ *
+ * <p>This class is not thread-safe - all access must be externally
+ * synchronized.</p>
+ *
+ * <h2>Responsibilities</h2>
+ * <ul>
+ *   <li>Leader election and pre-election (via {@link ElectionProtocol})</li>
+ *   <li>Log replication and conflict resolution</li>
+ *   <li>Commit index advancement via quorum agreement</li>
+ *   <li>Membership changes (joint consensus)</li>
+ *   <li>Linearizable reads (via {@link ReadIndexMode})</li>
+ *   <li>Leadership transfer</li>
+ *   <li>Snapshot installation</li>
+ * </ul>
+ *
+ * @see Role
+ * @see consensus.engine.RaftEngine
+ */
 public class Raft {
+
+    /** This node's unique identifier. */
     private final NodeId id;
-        private long term;
+
+    /** Current term (monotonically increasing). */
+    private long term;
+
+    /** The node this node voted for in the current term, if any. */
     private Optional<NodeId> votedFor;
 
+    /** Protocol configuration. */
     private final RaftConfig config;
+
+    /** The Raft log (persisted + unstable). */
     private final RaftLog log;
+
+    /** Current cluster membership configuration. */
     private MembershipConfig membership;
-    
-    // Role - Leader, Follower, Learner, Candidate, PreCandidate
+
+    /** Current protocol role (Leader, Follower, Learner, Candidate, PreCandidate). */
     private Role role;
 
+    /** Random number generator for election timeout jitter. */
     private final RandomGenerator random;
 
+    /** Rejection from the most recent {@link #step} call, if any. */
     private Rejection rejection;
 
-    // Output buffers
+    /* ==================== OUTPUT BUFFERS ==================== */
+
+    /** Messages to send to peers immediately. */
     private final List<Message.Peer> messages;
+
+    /** Messages to send after the corresponding log entries are persisted. */
     private final List<Message.Peer> messagesAfterAppend;
+
+    /** Completed read states to serve to clients. */
     private final List<ReadState> readStates;
+
+    /** Read states awaiting state machine apply before they can be served. */
     private final Queue<ReadState> readsAwaitingApply;
 
+    /**
+     * Creates a Raft instance, initializing as {@link Follower} or
+     * {@link Learner} based on the membership configuration.
+     *
+     * @param state              persisted hard state (term, voted-for)
+     * @param raftConfig         protocol configuration
+     * @param logStorage         persisted log storage
+     * @param membershipConfig   cluster membership from the latest snapshot
+     * @param randomGenerator    random generator for election timeout jitter
+     * @throws StorageException if the log storage cannot be read
+     */
     public Raft(
             RaftState state,
             RaftConfig raftConfig,
@@ -69,7 +125,195 @@ public class Raft {
         rejection = null;
     }
 
-    // ────────────────────── APIS ──────────────────────
+    /* ==================== STATE ACCESSORS ==================== */
+
+    /**
+     * Returns this node's unique identifier.
+     *
+     * @return the node id
+     */
+    public NodeId id() {
+        return id;
+    }
+
+    /**
+     * Returns the current term.
+     *
+     * @return the term
+     */
+    public long term() {
+        return term;
+    }
+
+    /**
+     * Returns the node this peer voted for in the current term, if any.
+     *
+     * @return the voted-for node, or empty
+     */
+    public Optional<NodeId> votedFor() {
+        return votedFor;
+    }
+
+    /**
+     * Returns the current protocol role type.
+     *
+     * @return the role type
+     */
+    public RoleType roleType() {
+        return role.type();
+    }
+
+    /**
+     * Returns the known leader id, or empty if unknown.
+     *
+     * <p>If this node is the leader, returns its own id. Otherwise
+     * returns the leader tracked by the current replicant role.</p>
+     *
+     * @return the leader id, or empty
+     */
+    public Optional<NodeId> leaderId() {
+        return switch (role) {
+            case Leader _ -> Optional.of(id);
+            case Follower f when f.hasLeader() -> Optional.of(f.leaderId());
+            case Learner l when l.hasLeader() -> Optional.of(l.leaderId());
+            default -> Optional.empty();
+        };
+    }
+
+    /**
+     * Returns the highest committed log index.
+     *
+     * @return the committed index
+     */
+    public long commitIndex() {
+        return log.committed();
+    }
+
+    /**
+     * Returns the highest applied log index.
+     *
+     * @return the applied index
+     */
+    public long appliedIndex() {
+        return log.applied();
+    }
+
+    /**
+     * Returns the current cluster membership configuration.
+     *
+     * @return the membership config
+     */
+    public MembershipConfig membership() {
+        return membership;
+    }
+
+    /**
+     * Returns the cluster replication progress if this node is the leader.
+     *
+     * @return the cluster progress, or empty if not leader
+     */
+    public Optional<ClusterProgress> clusterProgress() {
+        if (role instanceof Leader l) {
+            return Optional.of(l.clusterProgress());
+        }
+
+        return Optional.empty();
+    }
+
+    /**
+     * Returns the leadership transfer target if a transfer is in progress.
+     *
+     * @return the transfer target, or empty if no transfer is active
+     */
+    public Optional<NodeId> leaderTransferee() {
+        if (role instanceof Leader l) {
+           return l.transferTarget();
+        }
+
+        return Optional.empty();
+    }
+
+    /**
+     * Returns the underlying Raft log.
+     *
+     * @return the log
+     */
+    public RaftLog log() {
+        return log;
+    }
+
+    /* ==================== OUTPUT ==================== */
+
+    /**
+     * Returns {@code true} if there is pending output (messages or
+     * read states) to be collected.
+     *
+     * @return {@code true} if output is available
+     */
+    public boolean hasOutput() {
+        return !messages.isEmpty() || !messagesAfterAppend.isEmpty() || !readStates.isEmpty();
+    }
+
+    /**
+     * Drains a list, returning a copy and clearing the original.
+     *
+     * @param list the list to drain
+     * @param <T>  the element type
+     * @return a snapshot of the list contents
+     */
+    private <T> List<T> drain(List<T> list) {
+        var items = new ArrayList<>(list);
+        list.clear();
+        return items;
+    }
+
+    /**
+     * Drains and returns all buffered immediate messages.
+     *
+     * @return the messages to send to peers
+     */
+    public List<Message.Peer> drainMessages() {
+        return drain(messages);
+    }
+
+    /**
+     * Drains and returns all buffered messages that must be sent
+     * after the corresponding log entries are persisted.
+     *
+     * @return the messages to send after persistence
+     */
+    public List<Message.Peer> drainMessagesAfterAppend() {
+        return drain(messagesAfterAppend);
+    }
+
+    /**
+     * Drains and returns all completed read states.
+     *
+     * @return the read states to serve to clients
+     */
+    public List<ReadState> drainReadStates() {
+        return drain(readStates);
+    }
+
+    /**
+     * Returns a snapshot of read states awaiting state machine apply.
+     *
+     * @return unmodifiable copy of reads awaiting apply
+     */
+    public List<ReadState> readsAwaitingApply() {
+        return List.copyOf(readsAwaitingApply);
+    }
+
+    /* ==================== INPUT ==================== */
+
+    /**
+     * Processes a single message, dispatching it to the handler for the
+     * current role.
+     *
+     * @param m the message to process
+     * @return the rejection if the input was rejected, or empty
+     * @throws StorageException if a log read fails
+     */
     public Optional<Rejection> step(Message m) throws StorageException {
         rejection = null;
         switch (role) {
@@ -82,92 +326,16 @@ public class Raft {
         return Optional.ofNullable(rejection);
     }
 
-    public NodeId id() {
-        return id;
-    }
 
-    public long term() {
-        return term;
-    }
+    /* ==================== SENDING MESSAGES ==================== */
 
-    public boolean hasOutput() {
-        return !messages.isEmpty() || !messagesAfterAppend.isEmpty() || !readStates.isEmpty();
-    }
-
-
-    private <T> List<T> drain(List<T> list) {
-        var items = new ArrayList<>(list);
-        list.clear();
-        return items;
-    }
-
-    public List<ReadState> readsAwaitingApply() {
-        return List.copyOf(readsAwaitingApply);
-    }
-
-    public List<Message.Peer> drainMessages() {
-        return drain(messages);
-    }
-
-    public List<Message.Peer> drainMessagesAfterAppend() {
-        return drain(messagesAfterAppend);
-    }
-
-    public List<ReadState> drainReadStates() {
-        return drain(readStates);
-    }
-
-    public PersistentState persistentState() {
-        return new PersistentState(term, votedFor);
-    }
-
-    public VolatileState volatileState() {
-        var leaderId = switch (role) {
-            case Leader _ -> id;
-            case Follower f when f.hasLeader() -> f.leaderId();
-            case Learner l when l.hasLeader() -> l.leaderId();
-            default -> null;
-        };
-        return new VolatileState(role.type(), Optional.ofNullable(leaderId));
-    }
-
-    public long commitIndex() {
-        return log.committed();
-    }
-
-    public long appliedIndex() {
-        return log.applied();
-    }
-
-    public MembershipConfig membership() {
-        return membership;
-    }
-
-    public Optional<ClusterProgress> clusterProgress() {
-        if (role instanceof Leader l) {
-            return Optional.of(l.clusterProgress());
-        }
-
-        return Optional.empty();
-    }
-
-    public Optional<NodeId> leaderTransferee() {
-        if (role instanceof Leader l) {
-           return l.transferTarget();
-        }
-
-        return Optional.empty();
-    }
-
-    public CheckpointState checkpointState() {
-        return new CheckpointState(log.committed());
-    }
-
-    public RaftLog log() {
-        return log;
-    }
-
-    // ────────────────────── SENDING MESSAGES ──────────────────────
+    /**
+     * Buffers a peer message for sending. Responses that depend on log
+     * persistence go to {@code messagesAfterAppend}; all others go to
+     * {@code messages} for immediate delivery.
+     *
+     * @param m the message to buffer
+     */
     private void send(Message.Peer m) {
         if (m instanceof Message.AppendEntriesResponse || m instanceof Message.RequestPreVoteResponse || m instanceof Message.RequestVoteResponse) {
             messagesAfterAppend.add(m);
@@ -177,34 +345,42 @@ public class Raft {
 
     }
 
+    /**
+     * Records a rejection for the current step.
+     *
+     * @param r the rejection
+     */
     private void reject(Rejection r) {
         rejection = r;
     }
 
+    /** @param reason the data proposal drop reason */
     private void reject(DataDropReason reason) {
         reject(new Rejection.DataProposalRejected(reason));
     }
 
+    /** @param reason the membership change drop reason */
     private void reject(MembershipChangeDropReason reason) {
         reject(new Rejection.MembershipChangeRejected(reason));
     }
 
+    /** @param reason the read index drop reason */
     private void reject(ReadDropReason reason) {
         reject(new Rejection.ReadIndexRejected(reason));
     }
 
-    // ────────────────────── ROLE TRANSITIONS ──────────────────────
+    /* ==================== ROLE TRANSITIONS ==================== */
 
     /**
-     * Transitions to PreCandidate — a transient role that probes whether
+     * Transitions to PreCandidate  - a transient role that probes whether
      * this node could win an election without actually incrementing the term.
      *
      * <p>Unlike becomeCandidate, this does NOT change term or votedFor.
-     * That's the whole point of PreVote — if the node is partitioned and
+     * That's the whole point of PreVote  - if the node is partitioned and
      * can't win, it hasn't disrupted the cluster with a term bump.</p>
      *
-     * <p>Valid: Follower → PreCandidate<br>
-     * Invalid: Leader, PreCandidate → PreCandidate (throws)</p>
+     * <p>Valid: Follower -> PreCandidate<br>
+     * Invalid: Leader, PreCandidate -> PreCandidate (throws)</p>
      *
      * @return the newly created PreCandidate role instance
      */
@@ -221,12 +397,12 @@ public class Raft {
     }
 
     /**
-     * Transitions to Candidate — starts a real election by incrementing
+     * Transitions to Candidate  - starts a real election by incrementing
      * the term and recording a self-vote. Unlike becomePreCandidate, this
      * is a commitment: even if the election fails, the term has been bumped.
      *
-     * <p>Valid: Follower, PreCandidate → Candidate<br>
-     * Invalid: Leader, Candidate → Candidate (throws)</p>
+     * <p>Valid: Follower, PreCandidate -> Candidate<br>
+     * Invalid: Leader, Candidate -> Candidate (throws)</p>
      *
      * @return the newly created Candidate role instance
      */
@@ -244,7 +420,7 @@ public class Raft {
     /**
      * Transitions to Follower, optionally with a known leader.
      *
-     * <p>This is the most common transition — it happens when:</p>
+     * <p>This is the most common transition  - it happens when:</p>
      * <ul>
      *   <li>A higher-term message arrives (Leader/Candidate/PreCandidate
      *       steps down)</li>
@@ -253,7 +429,7 @@ public class Raft {
      * </ul>
      *
      * <p>votedFor is only cleared when the term actually changes. If
-     * nextTerm == term, the vote is preserved — clearing it would violate
+     * nextTerm == term, the vote is preserved  - clearing it would violate
      * "vote at most once per term" and could allow a node to double-vote
      * within the same term.</p>
      *
@@ -262,7 +438,7 @@ public class Raft {
      * @return the newly created Follower role instance
      */
     private Follower becomeFollower(long nextTerm, NodeId leader) {
-        // Only clear votedFor on term change — preserves the
+        // Only clear votedFor on term change  - preserves the
         // "one vote per term" invariant on same-term transitions.
         if (nextTerm != term) {
             term = nextTerm;
@@ -281,7 +457,7 @@ public class Raft {
     }
 
     /**
-     * Convenience overload — transitions to Follower with no known leader.
+     * Convenience overload  - transitions to Follower with no known leader.
      * Used when stepping down due to a higher-term vote request or election loss,
      * where the leader identity is not yet known.
      *
@@ -299,13 +475,13 @@ public class Raft {
      * the cluster, setting each peer's nextIndex to our last log
      * index + 1.</p>
      *
-     * <p>Valid: Candidate → Leader<br>
-     * Invalid: Follower → Leader (throws — must win an election first)</p>
+     * <p>Valid: Candidate -> Leader<br>
+     * Invalid: Follower -> Leader (throws  - must win an election first)</p>
      *
      * <p>Note: the caller is responsible for appending the initial
      * placeholder entry after this method returns. The placeholder is
      * needed so the new leader can commit entries from prior terms
-     * (Raft §5.4.2 — a leader can only commit entries from its own term,
+     * (Raft §5.4.2  - a leader can only commit entries from its own term,
      * and the no-op entry serves that purpose).</p>
      *
      * @return the newly created Leader role instance
@@ -321,7 +497,7 @@ public class Raft {
     /**
      * Transitions to Learner, adopting a new term if higher.
      *
-     * <p>Mirrors becomeFollower's term/vote logic — votedFor is cleared
+     * <p>Mirrors becomeFollower's term/vote logic  - votedFor is cleared
      * only on term change to preserve the "one vote per term" invariant.</p>
      *
      * <p>This is used when a Learner receives a message with a higher
@@ -346,16 +522,22 @@ public class Raft {
 
         var learner = new Learner(leader, config);
 
-        // Same logic as becomeFollower — only clear votedFor on term change.
+        // Same logic as becomeFollower  - only clear votedFor on term change.
         role = learner;
         return learner;
     }
 
+    /**
+     * Transitions to Learner without a known leader.
+     *
+     * @param nextTerm the term to adopt
+     * @return the newly created or reused Learner role instance
+     */
     private Learner becomeLearner(long nextTerm) {
         return becomeLearner(nextTerm, null);
     }
 
-    // ────────────────────── TICK HANDLING PER ROLE ──────────────────────
+    /* ==================== TICK HANDLING PER ROLE ==================== */
 
     /**
      * Handles a tick for the Leader role. The leader has two periodic timers:
@@ -365,7 +547,7 @@ public class Raft {
      *       a majority of peers have responded recently. If quorum is lost,
      *       the leader steps down to Follower to avoid a "zombie leader"
      *       that is partitioned from the cluster. After a quorum check, any
-     *       in-progress leadership transfer is aborted — if the transfer
+     *       in-progress leadership transfer is aborted  - if the transfer
      *       hasn't completed within an election timeout, the transferee is
      *       likely unreachable.</li>
      *   <li><b>Heartbeat (heartbeat timeout interval):</b> Broadcasts
@@ -424,7 +606,7 @@ public class Raft {
      *   Problem (fixed window boundary):
      *     cycle N                          cycle N+1
      *     |--- HB sent --- HB sent ---|--- HB sent --- HB sent ---|
-     *                            ↑
+     *                            ^
      *                      delayed HB response from cycle N-1 arrives
      *                      -> marks peer as active in cycle N
      *                      -> peer counted as alive even though it hasn't
@@ -438,7 +620,7 @@ public class Raft {
      *   Instead of boolean active flags, check:
      *     peerAckedSeq[peer] >= currentSeq - N
      *
-     *   where N = heartbeat rounds per eljection timeout (e.g., 10)
+     *   where N = heartbeat rounds per election timeout (e.g., 10)
      *
      *   A peer is "alive" if it has acked a heartbeat within the last N rounds.
      *   No reset cycle, no boundary artifacts. Each ack is timestamped with its
@@ -448,7 +630,7 @@ public class Raft {
      * <p><b>Consideration: AppendEntries responses.</b></p>
      * <ul>
      *   <li>The current boolean active flag is set by ANY response from a
-     *       peer — heartbeat responses, AppendEntries responses, etc.</li>
+     *       peer  - heartbeat responses, AppendEntries responses, etc.</li>
      *   <li>peerAckedSeq only tracks heartbeat acks, so AppendEntries
      *       responses wouldn't count as liveness signals</li>
      *   <li>If implementing, also update peerAckedSeq on AppendEntries
@@ -466,7 +648,7 @@ public class Raft {
      * <ul>
      *   <li>Election timeout is long (e.g., 10 heartbeat intervals), so
      *       many heartbeats are sent per cycle</li>
-     *   <li>A single stale response is unlikely to be the only signal — if
+     *   <li>A single stale response is unlikely to be the only signal  - if
      *       a peer is truly alive, it will respond to current heartbeats
      *       too</li>
      *   <li>The window drift is at most one heartbeat interval, which is
@@ -476,7 +658,7 @@ public class Raft {
      * </ul>
      */
     private void handleTick(Leader l) throws StorageException {
-        // Quorum check fires on election timeout interval — much longer than heartbeat.
+        // Quorum check fires on election timeout interval  - much longer than heartbeat.
         if (l.canCheckQuorumAfterTick()) {
             step(new Message.CheckQuorum(id));
             // If the quorum check caused a step-down, abort any in-progress transfer.
@@ -487,10 +669,10 @@ public class Raft {
             }
         }
 
-        // The quorum check may have caused a step-down — bail out if no longer leader.
+        // The quorum check may have caused a step-down  - bail out if no longer leader.
         if (!l.equals(role)) return;
 
-        // Heartbeat fires on heartbeat timeout interval — typically much shorter than
+        // Heartbeat fires on heartbeat timeout interval  - typically much shorter than
         // election timeout (e.g. 1 tick vs 10 ticks).
         if (l.canSendHeartBeatAfterTick()) {
             step(new Message.TriggerHeartbeat(id));
@@ -499,7 +681,7 @@ public class Raft {
 
     /**
      * Handles a tick for the PreCandidate role. Same election round timer
-     * logic as {@link #handleTick(Candidate)} — if the pre-vote round
+     * logic as {@link #handleTick(Candidate)}  - if the pre-vote round
      * stalls, the node retries with a fresh pre-election and new randomized
      * timeout.
      */
@@ -511,7 +693,7 @@ public class Raft {
 
     /**
      * Handles a tick for the Candidate role. A Candidate runs a single
-     * timer — the election round timer — which bounds how long a real
+     * timer  - the election round timer  - which bounds how long a real
      * election round can take before giving up and retrying.
      *
      * <p>If the round timer expires without receiving votes from a majority
@@ -522,7 +704,7 @@ public class Raft {
      *
      * <p>The retry is dispatched as a {@link Message.TriggerElection} through
      * {@code step()}, which calls {@code candidateElection()} with
-     * {@link ElectionCause#ELECTION_ROUND_TIMEOUT} — incrementing the term,
+     * {@link ElectionCause#ELECTION_ROUND_TIMEOUT}  - incrementing the term,
      * recording a self-vote, and broadcasting {@code RequestVote} to all
      * voters.</p>
      */
@@ -533,8 +715,8 @@ public class Raft {
     }
 
     /**
-     * Handles a tick for the Follower role. A Follower runs a single timer —
-     * the election timer — which detects leader failure and triggers a new
+     * Handles a tick for the Follower role. A Follower runs a single timer  -
+     * the election timer  - which detects leader failure and triggers a new
      * election.
      *
      * <p>Two conditions must be met before starting an election:</p>
@@ -559,8 +741,8 @@ public class Raft {
     }
 
     /**
-     * Handles a tick for the Learner role. A Learner runs a single timer —
-     * the lease timer — which tracks whether the known leader is still
+     * Handles a tick for the Learner role. A Learner runs a single timer  -
+     * the lease timer  - which tracks whether the known leader is still
      * alive.
      *
      * <p>Learners do not participate in elections and cannot start one, but
@@ -571,7 +753,7 @@ public class Raft {
      *
      * <p>The lease is renewed whenever the learner receives a message from
      * the leader (AppendEntries, heartbeat, snapshot). Unlike voters, a
-     * learner takes no further action after forgetting the leader — it
+     * learner takes no further action after forgetting the leader  - it
      * simply waits for a new leader to contact it.</p>
      */
     private void handleTick(Learner l) {
@@ -580,8 +762,15 @@ public class Raft {
         }
     }
 
-    // ────────────────────── MESSAGE HANDLING PER ROLE ──────────────────────
+    /* ==================== MESSAGE HANDLING PER ROLE ==================== */
 
+    /**
+     * Dispatches a message to the appropriate handler for the Leader role.
+     *
+     * @param l the leader role
+     * @param m the message
+     * @throws StorageException if a log read fails
+     */
     private void handleMessage(Leader l, Message m) throws StorageException {
         switch (m) {
             case Message.Tick _ -> handleTick(l);
@@ -620,7 +809,7 @@ public class Raft {
             case Message.ReadIndexResponse _ -> {
                 // Stale: this node was a Follower that forwarded a ReadIndex
                 // to the old leader, then won an election and became Leader.
-                // The old leader's response arrives late. Drop it — this node
+                // The old leader's response arrives late. Drop it  - this node
                 // now has its own ReadIndex tracking with fresh seq state.
                 // The read context belongs to the previous term/role.
             }
@@ -636,6 +825,13 @@ public class Raft {
         }
     }
 
+    /**
+     * Dispatches a message to the appropriate handler for the Candidate role.
+     *
+     * @param c the candidate role
+     * @param m the message
+     * @throws StorageException if a log read fails
+     */
     private void handleMessage(Candidate c, Message m) throws StorageException {
         switch (m) {
             case Message.Tick _ -> handleTick(c);
@@ -658,7 +854,7 @@ public class Raft {
                 // Stale: this node was a Leader that stepped down (higher
                 // term or quorum loss) and started a new election as
                 // Candidate. Late HeartbeatResponses from when it was Leader
-                // are irrelevant — this node no longer tracks peer progress.
+                // are irrelevant  - this node no longer tracks peer progress.
             }
             case Message.TransferLeadership _ -> {
                 // Dropped: a Candidate has no leader identity and cannot
@@ -675,7 +871,7 @@ public class Raft {
             case Message.ReadIndexResponse _ -> {
                 // Stale: this node was a Follower that forwarded a ReadIndex,
                 // then started an election (became Candidate). The old leader's
-                // response arrives late. Drop it — the node is mid-election
+                // response arrives late. Drop it  - the node is mid-election
                 // and doesn't serve client requests in this state. The read
                 // context belongs to a previous role.
             }
@@ -692,6 +888,13 @@ public class Raft {
         }
     }
 
+    /**
+     * Dispatches a message to the appropriate handler for the PreCandidate role.
+     *
+     * @param pc the pre-candidate role
+     * @param m  the message
+     * @throws StorageException if a log read fails
+     */
     private void handleMessage(PreCandidate pc, Message m) throws StorageException {
         switch (m) {
             case Message.Tick _ -> handleTick(pc);
@@ -708,7 +911,7 @@ public class Raft {
             case Message.HeartbeatResponse _ -> {
                 // Stale: this node was a Leader that stepped down (higher
                 // term) and became a PreCandidate. Late HeartbeatResponses
-                // from when it was Leader are irrelevant — this node no
+                // from when it was Leader are irrelevant  - this node no
                 // longer tracks peer progress.
             }
             case Message.TransferLeadership _ -> {
@@ -717,22 +920,22 @@ public class Raft {
                 // retry after a new leader is elected.
             }
             case Message.TimeoutNow _ -> {
-                // Dropped: a PreCandidate is mid-election — it will either
-                // win (become Candidate → Leader) or lose (become Follower).
+                // Dropped: a PreCandidate is mid-election  - it will either
+                // win (become Candidate -> Leader) or lose (become Follower).
                 // A TimeoutNow for a leadership transfer is meaningless in
                 // this transitional state.
             }
             case Message.ReadIndex _ -> {
                 reject(ReadDropReason.NO_LEADER);
                 // Dropped: a PreCandidate is mid-pre-election with no known
-                // leader. Same reasoning as Candidate — cannot serve or
+                // leader. Same reasoning as Candidate  - cannot serve or
                 // forward reads. The application should retry after an
                 // election completes.
             }
             case Message.ReadIndexResponse _ -> {
                 // Stale: this node was a Follower that forwarded a ReadIndex,
                 // then started a pre-election (became PreCandidate). The old
-                // leader's response arrives late. Drop it — same reasoning
+                // leader's response arrives late. Drop it  - same reasoning
                 // as Candidate.
             }
             case Message.ForgetLeader _ -> {
@@ -748,6 +951,13 @@ public class Raft {
         }
     }
 
+    /**
+     * Dispatches a message to the appropriate handler for the Follower role.
+     *
+     * @param f the follower role
+     * @param m the message
+     * @throws StorageException if a log read fails
+     */
     private void handleMessage(Follower f, Message m) throws StorageException {
         switch (m) {
             case Message.Tick _ -> handleTick(f);
@@ -773,14 +983,14 @@ public class Raft {
                 // Stale: this node was a Leader that discovered a higher term
                 // (another leader was elected) and stepped down to Follower.
                 // Late AppendEntriesResponses from when it was Leader are
-                // irrelevant — this node no longer tracks peer progress.
+                // irrelevant  - this node no longer tracks peer progress.
             }
             case Message.InstallSnapshot is -> handleInstallSnapshotForVoter(is);
             case Message.Heartbeat hb -> handleHeartbeatForVoter(hb);
             case Message.HeartbeatResponse _ -> {
                 // Stale: this node was a Leader that discovered a higher term
                 // and stepped down to Follower. Late HeartbeatResponses from
-                // when it was Leader are irrelevant — this node no longer
+                // when it was Leader are irrelevant  - this node no longer
                 // tracks peer progress.
             }
             case Message.TimeoutNow _ -> transferElection(f);
@@ -797,6 +1007,13 @@ public class Raft {
         }
     }
 
+    /**
+     * Dispatches a message to the appropriate handler for the Learner role.
+     *
+     * @param l the learner role
+     * @param m the message
+     * @throws StorageException if a log read fails
+     */
     private void handleMessage(Learner l, Message m) throws StorageException {
         switch (m) {
             case Message.Tick _ -> handleTick(l);
@@ -810,7 +1027,7 @@ public class Raft {
                 // Stale: this node was a Leader that was demoted to Learner
                 // by a membership change (e.g., removed from voters and added
                 // as a learner). Late AppendEntriesResponses from when it was
-                // Leader are irrelevant — this node no longer tracks peer
+                // Leader are irrelevant  - this node no longer tracks peer
                 // progress.
             }
             case Message.InstallSnapshot is -> handleInstallSnapshot(l, is);
@@ -818,7 +1035,7 @@ public class Raft {
             case Message.HeartbeatResponse _ -> {
                 // Stale: this node was a Leader that was demoted to Learner
                 // by a membership change. Late HeartbeatResponses from when
-                // it was Leader are irrelevant — this node no longer tracks
+                // it was Leader are irrelevant  - this node no longer tracks
                 // peer progress.
             }
             case Message.TransferLeadership tl -> handleLeadershipTransfer(l, tl);
@@ -834,17 +1051,17 @@ public class Raft {
         }
     }
 
-    // ────────────────────── ELECTION HANDLING ──────────────────────
+    /* ==================== ELECTION HANDLING ==================== */
 
     /**
      * Checks whether this node is eligible to start an election.
      *
      * <p>Three conditions must hold:</p>
      * <ul>
-     *   <li>The node is a voter — learners cannot campaign.</li>
-     *   <li>No unstable snapshot is pending — the node must finish applying
+     *   <li>The node is a voter  - learners cannot campaign.</li>
+     *   <li>No unstable snapshot is pending  - the node must finish applying
      *       the snapshot before it can safely run an election.</li>
-     *   <li>No unapplied membership changes — see
+     *   <li>No unapplied membership changes  - see
      *       {@link #hasUnappliedMembershipChange()}.</li>
      * </ul>
      */
@@ -862,53 +1079,53 @@ public class Raft {
      * committed without true majority or even committed entries being
      * lost.</p>
      *
-     * <h4>Example 1 — committed without true majority (3 → 4 nodes)</h4>
+     * <h4>Example 1  - committed without true majority (3 -> 4 nodes)</h4>
      * <ol>
      *   <li>Cluster: {A (leader), B (follower), C (follower)}.
      *       Quorum = 2 of 3.</li>
-     *   <li>A proposes "add D". Replicated to A, B, C → committed.
+     *   <li>A proposes "add D". Replicated to A, B, C -> committed.
      *       Committed config = {A, B, C, D}, quorum = 3 of 4.</li>
-     *   <li>A applies it → A's active config = {A, B, C, D}.
+     *   <li>A applies it -> A's active config = {A, B, C, D}.
      *       D joins, catches up.</li>
-     *   <li>B: entry committed but unapplied → active config still
-     *       {A, B, C}. C may or may not have applied it — doesn't
+     *   <li>B: entry committed but unapplied -> active config still
+     *       {A, B, C}. C may or may not have applied it  - doesn't
      *       matter (vote granting does not check the candidate's
      *       membership, so C votes for B regardless of C's own
      *       config).</li>
      *   <li>A becomes unreachable.</li>
      *   <li>B's election timer fires. B campaigns with stale config
-     *       {A, B, C}. C votes for B → 2 of 3 → B becomes leader.</li>
-     *   <li>Client write arrives. B replicates. B + C acknowledge →
+     *       {A, B, C}. C votes for B -> 2 of 3 -> B becomes leader.</li>
+     *   <li>Client write arrives. B replicates. B + C acknowledge ->
      *       committed under {A, B, C} (2 of 3).</li>
      *   <li>Real config is {A, B, C, D}, quorum = 3 of 4. The write
-     *       was only acknowledged by 2 nodes — <b>committed without
+     *       was only acknowledged by 2 nodes  - <b>committed without
      *       true majority</b>.</li>
      * </ol>
      *
-     * <h4>Example 2 — committed entry lost (3 → 5 nodes)</h4>
+     * <h4>Example 2  - committed entry lost (3 -> 5 nodes)</h4>
      * <ol>
      *   <li>Cluster: {A (leader), B (follower), C (follower)}.
      *       Quorum = 2 of 3.</li>
-     *   <li>A proposes "add D" (entry 5). Replicated to A, B, C →
-     *       committed. A applies it → A's config = {A, B, C, D}.
+     *   <li>A proposes "add D" (entry 5). Replicated to A, B, C ->
+     *       committed. A applies it -> A's config = {A, B, C, D}.
      *       D joins, catches up.</li>
-     *   <li>A proposes "add E" (entry 6). Replicated to A, B, C, D →
-     *       committed. A applies it → A's config = {A, B, C, D, E}.
+     *   <li>A proposes "add E" (entry 6). Replicated to A, B, C, D ->
+     *       committed. A applies it -> A's config = {A, B, C, D, E}.
      *       E joins, catches up.</li>
      *   <li>A proposes data entry 7. Replicated to D and E
-     *       (B, C are slow). {A, D, E} = 3 of 5 →
+     *       (B, C are slow). {A, D, E} = 3 of 5 ->
      *       <b>entry 7 is committed</b>.</li>
      *   <li>Partition: {A, D, E} vs {B, C}.</li>
      *   <li>B has entries 1–6 committed, 1–3 applied. Entry 4 (data)
-     *       is slow to apply → entries 5, 6 (config changes) queued
+     *       is slow to apply -> entries 5, 6 (config changes) queued
      *       behind it. B's active config = {A, B, C},
      *       quorum = 2 of 3.</li>
-     *   <li>B campaigns with {A, B, C}. Votes from B + C → 2 of 3 →
+     *   <li>B campaigns with {A, B, C}. Votes from B + C -> 2 of 3 ->
      *       B becomes leader (term 2). B does NOT have entry 7.</li>
      *   <li>B proposes entry 7' (different data, term 2).
-     *       B + C acknowledge → committed under stale config.</li>
+     *       B + C acknowledge -> committed under stale config.</li>
      *   <li>Partition heals. A sees term 2, steps down.</li>
-     *   <li>B sends AppendEntries → A, D, E truncate entry 7 (term 1),
+     *   <li>B sends AppendEntries -> A, D, E truncate entry 7 (term 1),
      *       accept entry 7' (term 2). <b>Committed entry lost</b>.</li>
      * </ol>
      *
@@ -960,7 +1177,7 @@ public class Raft {
      * without actually incrementing it.
      *
      * <p>The self-vote is sent as a RequestPreVoteResponse through
-     * send(), which queues it in messagesAfterAppend — ensuring the role
+     * send(), which queues it in messagesAfterAppend  - ensuring the role
      * transition is persisted before the vote is counted.</p>
      */
     private void preCandidateElection() throws StorageException {
@@ -990,18 +1207,18 @@ public class Raft {
      * <p>The {@code cause} is embedded in every {@code RequestVote}
      * message, allowing recipients to distinguish between:</p>
      * <ul>
-     *   <li>{@link ElectionCause#ELECTION_TIMEOUT} — normal election after timeout;
+     *   <li>{@link ElectionCause#ELECTION_TIMEOUT}  - normal election after timeout;
      *       voters with an active leader lease will reject</li>
-     *   <li>{@link ElectionCause#LEADER_TRANSFER} — leadership transfer;
+     *   <li>{@link ElectionCause#LEADER_TRANSFER}  - leadership transfer;
      *       voters bypass the leader lease check (the current leader
      *       authorized this)</li>
-     *   <li>{@link ElectionCause#WON_PREELECTION} — won a pre-vote;
+     *   <li>{@link ElectionCause#WON_PREELECTION}  - won a pre-vote;
      *       proceeds to real election at the same term voters already
      *       indicated willingness to support</li>
      * </ul>
      *
      * <p>The self-vote is sent as a {@code RequestVoteResponse} through
-     * {@link #send}, which queues it in {@code messagesAfterAppend} —
+     * {@link #send}, which queues it in {@code messagesAfterAppend}  -
      * ensuring the term and vote are persisted before the vote is
      * counted.</p>
      *
@@ -1024,7 +1241,7 @@ public class Raft {
 
     /**
      * Starts an election triggered by a {@code TimeoutNow} message from
-     * the current leader — a graceful leadership transfer.
+     * the current leader  - a graceful leadership transfer.
      *
      * <p>Always uses a real election (never pre-vote), because the leader
      * already verified the transferee is caught up. The
@@ -1040,7 +1257,7 @@ public class Raft {
     /**
      * Handles a PreVote request received while in the Learner role.
      *
-     * <p>A learner's committed config may be stale — the cluster could
+     * <p>A learner's committed config may be stale  - the cluster could
      * have already committed a config change promoting this learner to
      * voter, but the learner hasn't received it yet. If the learner
      * refuses to vote during that window, the remaining voters may not
@@ -1052,16 +1269,16 @@ public class Raft {
      *   <li>Cluster has A(learner), B(voter/leader), C(voter)</li>
      *   <li>A config change promoting A to voter is committed on
      *       quorum {B, C}</li>
-     *   <li>A hasn't received this config change yet — still thinks
+     *   <li>A hasn't received this config change yet  - still thinks
      *       it's a learner</li>
      *   <li>B (the leader) crashes</li>
      *   <li>New voter set is {A, B, C}, quorum requires 2 votes</li>
-     *   <li>C votes for itself — 1 vote. B is dead — unreachable</li>
+     *   <li>C votes for itself  - 1 vote. B is dead  - unreachable</li>
      *   <li>C sends RequestPreVote to A</li>
-     *   <li>If A refuses (thinks it's a learner) → no quorum possible
-     *       → cluster deadlocks</li>
-     *   <li>If A votes → C wins → becomes leader → replicates config
-     *       change to A → A finally learns it's a voter</li>
+     *   <li>If A refuses (thinks it's a learner) -> no quorum possible
+     *       -> cluster deadlocks</li>
+     *   <li>If A votes -> C wins -> becomes leader -> replicates config
+     *       change to A -> A finally learns it's a voter</li>
      * </ol>
      *
      * @param l       the current learner role
@@ -1076,7 +1293,7 @@ public class Raft {
      *
      * <p><b>Follower lease protection (PreVote):</b> if all of the
      * following hold, the pre-vote is explicitly rejected (not silently
-     * ignored — unlike {@code RequestVote}, pre-votes don't carry a term
+     * ignored  - unlike {@code RequestVote}, pre-votes don't carry a term
      * that we must adopt, so a rejection with our term lets the
      * pre-candidate learn about it):</p>
      * <ol>
@@ -1087,7 +1304,7 @@ public class Raft {
      *       timeout</li>
      * </ol>
      *
-     * <p>No {@link ElectionCause} bypass here — transfer elections always
+     * <p>No {@link ElectionCause} bypass here  - transfer elections always
      * use real {@code RequestVote} (never pre-vote), so a pre-vote is
      * never a transfer election.</p>
      *
@@ -1095,7 +1312,7 @@ public class Raft {
      * @param preVote the incoming PreVote request
      */
     private void handlePreVoteReq(Follower f, Message.RequestPreVote preVote) throws StorageException {
-        // Lease check: recently heard from a leader → reject disruptive pre-vote.
+        // Lease check: recently heard from a leader -> reject disruptive pre-vote.
         if (preVote.term() > term && config.leaderLivenessPolicy() == LeaderLivenessPolicy.QUORUM_VERIFIED && f.hasLeader() && !f.isElectionTimedOut()) {
             send(new Message.RequestPreVoteResponse(preVote.from(), id, term, false));
             return;
@@ -1111,11 +1328,11 @@ public class Raft {
      * @param hasLeader whether this node currently knows of a leader (lease check)
      */
     private void handlePreVoteReq(Message.RequestPreVote preVote, boolean hasLeader) throws StorageException {
-        // PreVote is for a future term — since PreVote doesn't touch our term or vote,
+        // PreVote is for a future term  - since PreVote doesn't touch our term or vote,
         // we can freely indicate willingness for a hypothetical future term.
         var isUpcomingTerm = preVote.term() > term;
         var hasVoteToCast = votedFor.isEmpty();
-        // We already voted for this same node — idempotent, safe to grant again.
+        // We already voted for this same node  - idempotent, safe to grant again.
         var alreadyVotedToSender = !hasVoteToCast && votedFor.get().equals(preVote.from());
         // Haven't voted for anyone and no known leader. If a leader exists, granting
         // would disrupt a healthy cluster (leader lease protection).
@@ -1135,7 +1352,7 @@ public class Raft {
     /**
      * Unconditionally rejects a PreVote. Used by Leader, Candidate, and
      * PreCandidate
-     * — roles that should not grant a PreVote because they are already leading or
+     *  - roles that should not grant a PreVote because they are already leading or
      * participating in an election.
      *
      * @param preVote the incoming PreVote request to reject
@@ -1154,11 +1371,11 @@ public class Raft {
         pc.recordVote(res.from(), res.voteGranted());
         var result = membership.quorumResult(pc.voteQuery());
         switch (result) {
-            // Proceed to real election — candidateElection() increments term,
+            // Proceed to real election  - candidateElection() increments term,
             // records self-vote, and sends RequestVote to all voters.
             case Quorum.REACHED -> candidateElection(ElectionCause.WON_PREELECTION);
             // Step down at our CURRENT term, not the response's term. The response
-            // carries the would-be future term — using it would inflate our term,
+            // carries the would-be future term  - using it would inflate our term,
             // defeating the purpose of PreVote.
             case Quorum.NOT_REACHED -> becomeFollower(term);
             case Quorum.PENDING -> {
@@ -1173,7 +1390,7 @@ public class Raft {
      * (adopting the new term, clearing vote and leader state) then
      * evaluates as a Follower via
      * {@link #handleVoteReq(Follower, Message.RequestVote)}. Same or
-     * lower term votes are rejected outright — these roles have already
+     * lower term votes are rejected outright  - these roles have already
      * voted for themselves or are otherwise committed to their current
      * election.</p>
      *
@@ -1196,13 +1413,13 @@ public class Raft {
      * Handles a {@code RequestVote} received while this node is the Leader.
      *
      * <p><b>Leader lease protection:</b> if all of the following hold,
-     * the vote is silently ignored — the leader does not step down, does
+     * the vote is silently ignored  - the leader does not step down, does
      * not adopt the higher term, and sends no response:</p>
      * <ol>
      *   <li>The vote is for a higher term (a same/lower-term vote is
      *       simply rejected by {@link #handleHigherTermVoteReq})</li>
      *   <li>{@code checkQuorum} is enabled</li>
-     *   <li>The quorum check timer has not elapsed — meaning the leader
+     *   <li>The quorum check timer has not elapsed  - meaning the leader
      *       recently verified it still has a responsive majority</li>
      *   <li>The election is not a
      *       {@link ElectionCause#LEADER_TRANSFER} (the leader itself
@@ -1212,7 +1429,7 @@ public class Raft {
      * <p>Why silence instead of a rejection: the candidate is at a higher
      * term. Any response we send carries our lower term, which the
      * candidate would drop (lower-term responses are ignored). So
-     * responding is pointless — the candidate will simply time out and
+     * responding is pointless  - the candidate will simply time out and
      * retry if it doesn't get enough votes.</p>
      *
      * <p>If the lease check does not apply (lease expired, checkQuorum
@@ -1224,7 +1441,7 @@ public class Raft {
      * @param voteReq the incoming vote request
      */
     private void handleVoteReq(Leader l, Message.RequestVote voteReq) throws StorageException {
-        // Leader lease: recently verified quorum → reject disruptive votes.
+        // Leader lease: recently verified quorum -> reject disruptive votes.
         if (voteReq.term() > term && config.leaderLivenessPolicy() == LeaderLivenessPolicy.QUORUM_VERIFIED && !l.isQuorumCheckTimedOut() && voteReq.cause() != ElectionCause.LEADER_TRANSFER) {
             return;
         }
@@ -1233,7 +1450,7 @@ public class Raft {
 
     /**
      * Handles a RequestVote received while in the Learner role.
-     * Same learner-promotion reasoning as for PreVote —
+     * Same learner-promotion reasoning as for PreVote  -
      * see {@link #handlePreVoteReq(Learner, Message.RequestPreVote)}.
      *
      * @param l       the current learner role
@@ -1258,12 +1475,12 @@ public class Raft {
      * <p><b>Follower lease protection (higher-term only):</b> before
      * adopting a higher term, the follower checks whether the leader
      * lease is still active. If all of the following hold, the vote is
-     * silently ignored — the follower does not adopt the higher term:</p>
+     * silently ignored  - the follower does not adopt the higher term:</p>
      * <ol>
      *   <li>{@code checkQuorum} is enabled</li>
      *   <li>The follower knows a leader ({@code hasLeader})</li>
      *   <li>The election timer has not reached the base election
-     *       timeout — meaning the follower recently heard from a
+     *       timeout  - meaning the follower recently heard from a
      *       leader</li>
      *   <li>The election is not a
      *       {@link ElectionCause#LEADER_TRANSFER}</li>
@@ -1273,7 +1490,7 @@ public class Raft {
      * {@code becomeFollower}:</b> {@code becomeFollower} clears the
      * leader reference (the new term has no confirmed leader). If we
      * called it first, {@code hasLeader} would always be false and the
-     * lease check would never trigger — completely defeating the lease
+     * lease check would never trigger  - completely defeating the lease
      * protection.</p>
      *
      * <p>For same-or-lower-term votes, no term change occurs so the
@@ -1285,7 +1502,7 @@ public class Raft {
      */
     private void handleVoteReq(Follower f, Message.RequestVote voteReq) throws StorageException {
         if (voteReq.term() > term) {
-            // Lease check: recently heard from a leader → reject disruptive vote.
+            // Lease check: recently heard from a leader -> reject disruptive vote.
             if (config.leaderLivenessPolicy() == LeaderLivenessPolicy.QUORUM_VERIFIED && f.hasLeader() && !f.isElectionTimedOut() && voteReq.cause() != ElectionCause.LEADER_TRANSFER) {
                 return;
             }
@@ -1316,7 +1533,7 @@ public class Raft {
      *   <li><b>Eligible to vote for the sender:</b>
      *     <ul>
      *       <li>Haven't voted yet AND (no known leader OR this is a
-     *           {@link ElectionCause#LEADER_TRANSFER} — transfer elections
+     *           {@link ElectionCause#LEADER_TRANSFER}  - transfer elections
      *           bypass the leader-exists check because the leader itself
      *           authorized the handoff)</li>
      *       <li>OR: already voted for this same sender (idempotent
@@ -1324,7 +1541,7 @@ public class Raft {
      *     </ul>
      *   </li>
      *   <li><b>Sender's log is at least as up-to-date as ours</b>
-     *       (Raft §5.4.1 Election restriction — prevents electing a
+     *       (Raft §5.4.1 Election restriction  - prevents electing a
      *       leader with a stale log)</li>
      * </ol>
      *
@@ -1359,14 +1576,14 @@ public class Raft {
     /**
      * Processes a RequestVoteResponse and decides the election outcome.
      *
-     * <p>If the response carries a higher term, step down immediately —
+     * <p>If the response carries a higher term, step down immediately  -
      * someone else has moved on and this election is stale. Otherwise,
      * tally the vote and act on the result:</p>
      * <ul>
      *   <li>WON: become leader and append a placeholder entry to commit
      *       entries from prior terms (Raft leader completeness
      *       requirement).</li>
-     *   <li>LOST: majority rejected — fall back to follower at the
+     *   <li>LOST: majority rejected  - fall back to follower at the
      *       current term.</li>
      *   <li>PENDING: still waiting for more votes, do nothing.</li>
      * </ul>
@@ -1376,7 +1593,7 @@ public class Raft {
      */
     private void handleVoteResponse(Candidate c, Message.RequestVoteResponse res) throws StorageException {
         // Higher term in response: another node has advanced.
-        // Step down — this election is obsolete.
+        // Step down  - this election is obsolete.
         if (res.term() > term) {
             becomeFollower(res.term());
             return;
@@ -1386,7 +1603,7 @@ public class Raft {
         switch (result) {
             // Append a no-op entry so the leader can commit entries from prior terms.
             case Quorum.REACHED -> appendPlaceholderEntry(becomeLeader());
-            // Majority rejected — step down at current term (not response's term,
+            // Majority rejected  - step down at current term (not response's term,
             // since we already checked higher term above).
             case Quorum.NOT_REACHED -> becomeFollower(term);
             case Quorum.PENDING -> {
@@ -1394,22 +1611,22 @@ public class Raft {
         }
     }
 
-    // ────────────────────── PROPOSAL HANDLING ──────────────────────
+    /* ==================== PROPOSAL HANDLING ==================== */
 
     /**
-     * Handles a data proposal on the leader — the only role that can
+     * Handles a data proposal on the leader  - the only role that can
      * actually append entries to the replicated log.
      *
      * <p>Proposals are rejected (with a notification) in these cases:</p>
      * <ol>
-     *   <li>Empty data — nothing to propose</li>
-     *   <li>Leader removed from cluster — a config change removed us, but
+     *   <li>Empty data  - nothing to propose</li>
+     *   <li>Leader removed from cluster  - a config change removed us, but
      *       we haven't stepped down yet. Accepting proposals in this
      *       window would append entries that can never reach quorum.</li>
-     *   <li>Leadership transfer in progress — we're handing off to another
+     *   <li>Leadership transfer in progress  - we're handing off to another
      *       node. Accepting proposals would extend the log and delay the
      *       transferee from catching up.</li>
-     *   <li>Uncommitted size limit exceeded — back-pressure. Too many
+     *   <li>Uncommitted size limit exceeded  - back-pressure. Too many
      *       entries are in-flight (appended but not yet committed).
      *       Accepting more would risk unbounded memory growth.</li>
      * </ol>
@@ -1426,7 +1643,7 @@ public class Raft {
             reject(DataDropReason.NO_DATA);
             return;
         }
-        // Config change may have removed this leader — check before appending.
+        // Config change may have removed this leader  - check before appending.
         if (!membership.isMember(id)) {
             reject(DataDropReason.REMOVED_FROM_CLUSTER);
             return;
@@ -1444,6 +1661,13 @@ public class Raft {
 
     }
 
+    /**
+     * Checks whether a data proposal can be forwarded to the leader.
+     * Records a rejection if forwarding is not possible.
+     *
+     * @param hasLeader whether a leader is known
+     * @return {@code true} if the proposal can be forwarded
+     */
     private boolean canForwardDataProposal(boolean hasLeader) {
         if (!hasLeader) {
             reject(DataDropReason.NO_LEADER);
@@ -1459,6 +1683,13 @@ public class Raft {
     }
 
 
+    /**
+     * Checks whether a membership change proposal can be forwarded to the leader.
+     * Records a rejection if forwarding is not possible.
+     *
+     * @param hasLeader whether a leader is known
+     * @return {@code true} if the proposal can be forwarded
+     */
     private boolean canForwardMembershipChangeProposal(boolean hasLeader) {
         if (!hasLeader) {
             reject(MembershipChangeDropReason.NO_LEADER);
@@ -1484,10 +1715,10 @@ public class Raft {
      *
      * <p>Note: forwarded proposals can still be dropped by the leader
      * (e.g., if the leader is transferring, or uncommitted size is
-     * exceeded). There is no acknowledgment back to the follower — the
+     * exceeded). There is no acknowledgment back to the follower  - the
      * client must handle retries.</p>
      *
-     * @param r the current follower role
+     * @param r the replicant role (follower or learner)
      * @param p the incoming data proposal
      */
     private void handleProposal(Replicant r, Message.DataProposal p) {
@@ -1500,7 +1731,7 @@ public class Raft {
 
 
 
-    // ────────────────────── LOG REPLICATION ──────────────────────
+    /* ==================== LOG REPLICATION ==================== */
 
     /**
      * Core append path for the leader. Checks uncommitted size budget,
@@ -1531,7 +1762,7 @@ public class Raft {
 
     /**
      * Sends AppendEntries to every peer (excluding self). Each peer gets a
-     * tailored message based on its PeerProgress — different peers may be at
+     * tailored message based on its PeerProgress  - different peers may be at
      * different log positions and receive different entries.
      *
      * @param l the current leader role
@@ -1542,6 +1773,12 @@ public class Raft {
         }
     }
 
+    /**
+     * Sends a probe (empty AppendEntries) to all peers.
+     *
+     * @param l the leader role
+     * @throws StorageException if a log read fails
+     */
     private void broadcastProbe(Leader l) throws StorageException {
         for (var target : l.peers()) {
             trySendAppend(l, target, false);
@@ -1549,7 +1786,7 @@ public class Raft {
     }
 
     /**
-     * Convenience overload — sends AppendEntries allowing empty messages.
+     * Convenience overload  - sends AppendEntries allowing empty messages.
      * Used by broadcastAppend, heartbeat-triggered sends, and rejection retries
      * where we always want to send even if there are no new entries (to deliver
      * the commit index or probe a stalled peer).
@@ -1573,13 +1810,13 @@ public class Raft {
      *
      * <p>When the peer's inflight buffer is full (canReplicateMessages
      * returns false), an empty AppendEntries is sent instead. This acts
-     * as a probe — if all inflight messages were dropped by the network,
+     * as a probe  - if all inflight messages were dropped by the network,
      * replication would stall because the peer never responds and
      * inflights never clear. The empty message eventually reaches the
      * peer, prompting a response that clears the backlog.</p>
      *
      * <p>If the prevLogIndex has been compacted (log truncated), we can't
-     * build an AppendEntries — fall back to sending a snapshot
+     * build an AppendEntries  - fall back to sending a snapshot
      * instead.</p>
      *
      * @param l                   the current leader role
@@ -1602,7 +1839,7 @@ public class Raft {
             var lastIndex = progress.next() - 1;
             var lastTerm = log.term(lastIndex);
 
-            // If cannot replicate messages i.e. Inflight full — send empty AppendEntries as
+            // If cannot replicate messages i.e. Inflight full  - send empty AppendEntries as
             // a heartbeat-like probe.
             // The follower will respond, clearing inflights and unblocking the pipeline.
             var nextEntries = progress.canReplicateMessages() ? log.entries(progress.next(), config.maxMsgSize()) : List.<Entry>of();
@@ -1620,7 +1857,7 @@ public class Raft {
             progress.sentCommit(log.committed());
             return true;
         } catch (EntryUnavailableException | CompactedException e) {
-            // prevLogIndex has been compacted — entries are no longer available.
+            // prevLogIndex has been compacted  - entries are no longer available.
             // The peer is too far behind for incremental replication.
             return trySendSnapshot(target, progress);
         }
@@ -1647,7 +1884,7 @@ public class Raft {
     /**
      * Appends a single empty entry when a new leader is elected.
      *
-     * <p>This is required by Raft §5.4.2 — a leader can only commit
+     * <p>This is required by Raft §5.4.2  - a leader can only commit
      * entries from its own term. The placeholder ensures there's at least
      * one entry in the current term, allowing prior-term entries to be
      * committed indirectly.</p>
@@ -1659,11 +1896,11 @@ public class Raft {
         return appendEntries(l, List.of(new Entry.Placeholder(term, log.lastIndex() + 1)));
     }
 
-    // ────────────────────── HANDLING APPEND ENTRIES RESPONSE ──────────────────────
+    /* ==================== HANDLING APPEND ENTRIES RESPONSE ==================== */
 
     /**
      * Handles an AppendEntriesResponse on the leader. This is the main
-     * replication feedback loop — the leader learns what each peer has
+     * replication feedback loop  - the leader learns what each peer has
      * accepted or rejected, and adjusts its tracking accordingly.
      *
      * <p>Also handles the leader's own self-ack (from
@@ -1674,7 +1911,7 @@ public class Raft {
      * @param aer the incoming response
      */
     private void handleAppendEntriesResponse(Leader l, Message.AppendEntriesResponse aer) throws StorageException {
-        // Stale response from a previous term — the peer has since joined
+        // Stale response from a previous term  - the peer has since joined
         // this term or a new one. Updating progress based on outdated
         // information could regress the match/next pointers.
         if (aer.term() < term) {
@@ -1688,7 +1925,7 @@ public class Raft {
 
 
 
-        // Unknown peer — possibly removed by a config change while the
+        // Unknown peer  - possibly removed by a config change while the
         // response was in flight. Nothing to do.
         if (!l.hasProgress(aer.from())) {
             return;
@@ -1696,7 +1933,7 @@ public class Raft {
 
         var progress = l.progress(aer.from());
 
-        // Any response proves the peer is alive — used by checkQuorum
+        // Any response proves the peer is alive  - used by checkQuorum
         // to verify the leader still has a responsive majority.
         progress.setActive(true);
 
@@ -1708,30 +1945,30 @@ public class Raft {
     }
 
     /**
-     * Handles a successful AppendEntriesResponse — the peer accepted our
+     * Handles a successful AppendEntriesResponse  - the peer accepted our
      * entries.
      *
      * <p>This is the core of the replication feedback loop. Each
      * successful response moves the system forward in up to five
      * ways:</p>
      * <ol>
-     *   <li><b>Advance the peer's match index</b> — we now know entries
+     *   <li><b>Advance the peer's match index</b>  - we now know entries
      *       up to {@code aer.index()} are durably stored on that
      *       peer.</li>
-     *   <li><b>Promote the peer's replication state</b> — once the match
-     *       point is found (Probe → Replicate), we can pipeline entries
+     *   <li><b>Promote the peer's replication state</b>  - once the match
+     *       point is found (Probe -> Replicate), we can pipeline entries
      *       without waiting for each ack, dramatically increasing
      *       throughput.</li>
-     *   <li><b>Advance the global commit index</b> — if this response
+     *   <li><b>Advance the global commit index</b>  - if this response
      *       pushes the peer past the quorum threshold, new entries
      *       become committed. Once committed, we broadcast immediately
      *       so all nodes can apply entries to their state machines
      *       without waiting for the next heartbeat.</li>
-     *   <li><b>Drain queued entries</b> — after freeing inflight slots
+     *   <li><b>Drain queued entries</b>  - after freeing inflight slots
      *       (acked entries are removed from the inflight tracker) or
      *       transitioning to Replicate (which resets inflights), there
      *       may be room to send more batches to this peer.</li>
-     *   <li><b>Complete leadership transfer</b> — if this peer is the
+     *   <li><b>Complete leadership transfer</b>  - if this peer is the
      *       transfer target and is now fully caught up, send TimeoutNow
      *       to trigger the target's immediate election.</li>
      * </ol>
@@ -1744,7 +1981,7 @@ public class Raft {
         // --- Step 1: Advance match ---
         //
         // tryUpdate sets match = aer.index() if aer.index() > current match.
-        // Returns false when the response is stale (aer.index() <= match) —
+        // Returns false when the response is stale (aer.index() <= match)  -
         // e.g., from a reordered or duplicate network message.
         //
         // Probe recovery edge case:
@@ -1752,7 +1989,7 @@ public class Raft {
         // for the ack before sending the next. When the leader sends an empty
         // AppendEntries (no new entries to send, just confirming the current
         // match point), the peer replies with index == match. tryUpdate returns
-        // false because match didn't advance. But the peer IS caught up — it
+        // false because match didn't advance. But the peer IS caught up  - it
         // just has nothing new to ack.
         //
         // Without this check, the peer stays in Probe forever, throttled to
@@ -1763,7 +2000,7 @@ public class Raft {
         // Why exclude Snapshot: if a peer is in Snapshot state (we sent it
         // a snapshot and are waiting for it to apply), a stale AppendEntries
         // response from before the snapshot could arrive with index == match.
-        // Transitioning to Replicate would be premature — the peer hasn't
+        // Transitioning to Replicate would be premature  - the peer hasn't
         // applied the snapshot yet, and the entries we'd pipeline might be
         // compacted (before the snapshot's firstIndex). So Snapshot state is
         // deliberately excluded here.
@@ -1776,13 +2013,13 @@ public class Raft {
 
         // --- Step 2: State promotion ---
         //
-        // Probe/ProbePaused → Replicate:
+        // Probe/ProbePaused -> Replicate:
         // The match point is established. Switch to the fast path where we
         // pipeline multiple batches without waiting for individual acks.
         // Replicate uses an inflight window for backpressure instead of
         // the one-at-a-time Probe throttle.
         //
-        // Snapshot → Probe → Replicate:
+        // Snapshot -> Probe -> Replicate:
         // The peer applied the snapshot and is now responding to AppendEntries.
         // Before switching to Replicate, we need match + 1 >= log.firstIndex():
         // this means we can actually send the next entry after the peer's match
@@ -1821,7 +2058,7 @@ public class Raft {
         var indexReplicatedAcrossMajority = membership.quorumCommit(l.matchIndexer());
 
         if (log.tryCommit(term, indexReplicatedAcrossMajority)) {
-            // Commit advanced — two things to do before broadcasting:
+            // Commit advanced  - two things to do before broadcasting:
             //
             // 1. Release deferred reads: if this is the leader's first commit
             // in the current term, committedInCurrentTerm() just became true.
@@ -1846,12 +2083,12 @@ public class Raft {
         // --- Step 4: Drain queued entries ---
         //
         // In Replicate state, tryUpdate freed inflight slots for the acked
-        // entries. In the Probe → Replicate transition, inflights were reset
+        // entries. In the Probe -> Replicate transition, inflights were reset
         // entirely. Either way, there may now be room to send more entries.
         //
         // We loop until trySendAppend returns false (no more entries to send
         // or inflight window full). canSendEmptyEntries=false avoids sending
-        // no-op messages — we only want to push actual log data here.
+        // no-op messages  - we only want to push actual log data here.
         if (isMessageFromAnotherNode) {
             while (trySendAppend(l, aer.from(), false)) {
             }
@@ -1870,7 +2107,7 @@ public class Raft {
     }
 
     /**
-     * Handles a rejected AppendEntriesResponse — the peer's log didn't
+     * Handles a rejected AppendEntriesResponse  - the peer's log didn't
      * match at prevLogIndex, so we need to backtrack and find the correct
      * match point.
      *
@@ -1878,7 +2115,7 @@ public class Raft {
      *
      * <p>Under normal conditions (no partitions), the follower's log is a
      * prefix of the leader's. The first rejection reveals where the
-     * follower's log ends, and the next probe succeeds — one round
+     * follower's log ends, and the next probe succeeds  - one round
      * trip.</p>
      *
      * <p>But after network partitions or overloaded systems, logs can
@@ -1902,21 +2139,21 @@ public class Raft {
      * <h3>Leader-side optimization (applied here)</h3>
      *
      * <p>The follower's rejection includes {@code indexHint} and
-     * {@code termHint} — its best guess for where the logs might match
+     * {@code termHint}  - its best guess for where the logs might match
      * and the term at that position in its log.</p>
      *
      * <p>The leader searches its OWN log backward from
      * {@code indexHint} for the first index where the leader's
-     * term ≤ {@code termHint}.</p>
+     * term &lt;= {@code termHint}.</p>
      *
      * <p><b>Why this works:</b> the follower said "my term at index N
-     * is T." Log terms only increase within a log, so every index ≤ N
-     * on the follower has term ≤ T. Any leader log entry with a term
-     * <i>higher</i> than T at an index ≤ N can never match the follower
-     * at that position — the follower's term there is at most T. Skip
+     * is T." Log terms only increase within a log, so every index &lt;= N
+     * on the follower has term &lt;= T. Any leader log entry with a term
+     * <i>higher</i> than T at an index &lt;= N can never match the follower
+     * at that position  - the follower's term there is at most T. Skip
      * all of them.</p>
      *
-     * <p><b>Example</b> (follower is shorter with lower terms — leader
+     * <p><b>Example</b> (follower is shorter with lower terms  - leader
      * has the higher divergent tail):</p>
      *
      * <pre>
@@ -1931,32 +2168,32 @@ public class Raft {
      *       have idx 12. Follower rejects with indexHint=7, termHint=2
      *       (its last index and the term there).</li>
      *
-     *   <li><b>Naive approach</b> — probe one by one from idx 7
+     *   <li><b>Naive approach</b>  - probe one by one from idx 7
      *       downward:
      *
      * <pre>
-     *   idx 7: leader term=5, follower term=2 → mismatch  (round trip 2)
-     *   idx 6: leader term=5, follower term=2 → mismatch  (round trip 3)
-     *   idx 5: leader term=5, follower term=2 → mismatch  (round trip 4)
-     *   idx 4: leader term=3, follower term=2 → mismatch  (round trip 5)
-     *   idx 3: leader term=3, follower term=1 → mismatch  (round trip 6)
-     *   idx 2: leader term=3, follower term=1 → mismatch  (round trip 7)
-     *   idx 1: leader term=1, follower term=1 → match!    (round trip 8)
+     *   idx 7: leader term=5, follower term=2 -> mismatch  (round trip 2)
+     *   idx 6: leader term=5, follower term=2 -> mismatch  (round trip 3)
+     *   idx 5: leader term=5, follower term=2 -> mismatch  (round trip 4)
+     *   idx 4: leader term=3, follower term=2 -> mismatch  (round trip 5)
+     *   idx 3: leader term=3, follower term=1 -> mismatch  (round trip 6)
+     *   idx 2: leader term=3, follower term=1 -> mismatch  (round trip 7)
+     *   idx 1: leader term=1, follower term=1 -> match!    (round trip 8)
      * </pre>
      *
      *       <b>8 round trips total.</b></li>
      *
-     *   <li><b>With leader-side optimization</b> — search leader's log
-     *       for term ≤ 2 starting from indexHint=7:
+     *   <li><b>With leader-side optimization</b>  - search leader's log
+     *       for term &lt;= 2 starting from indexHint=7:
      *
      * <pre>
      *   findConflictEntryByTerm(termHint=2, indexHint=7):
      *     idx 7: leader term=5 &gt; 2, skip    (term 5 covers idx 5-7)
      *     idx 4: leader term=3 &gt; 2, skip    (term 3 covers idx 2-4)
-     *     idx 1: leader term=1 ≤ 2, found!
+     *     idx 1: leader term=1 &lt;= 2, found!
      * </pre>
      *
-     *       Leader jumps straight to probing idx 1 — match!
+     *       Leader jumps straight to probing idx 1  - match!
      *       <b>2 round trips total</b> (initial probe + final probe).
      *       Walked through <b>3 distinct leader terms</b> (5, 3, 1)
      *       instead of 7 individual entries.</li>
@@ -1964,13 +2201,13 @@ public class Raft {
      *
      * <p><b>Complexity:</b> O(distinct terms in the leader's divergent
      * region between indexHint and the match point). In this example:
-     * 3 term boundaries instead of 7 entries — saving 6 round trips.</p>
+     * 3 term boundaries instead of 7 entries  - saving 6 round trips.</p>
      *
      * <p><b>When this optimization alone isn't enough:</b> if the
      * follower's divergent tail has <i>higher</i> terms than the
      * leader's, the leader's {@code findConflictEntryByTerm} immediately
-     * finds leader term ≤ termHint at the current index (since the
-     * leader's terms are already low) — no skipping occurs. It
+     * finds leader term &lt;= termHint at the current index (since the
+     * leader's terms are already low)  - no skipping occurs. It
      * degenerates to near-linear probing. The follower-side optimization
      * in {@link #handleAppendEntriesForSameOrHigherTerm} handles this
      * case by searching the follower's own log to skip its high-term
@@ -1984,7 +2221,7 @@ public class Raft {
         // If termHint > 0, the follower has a valid hint. Search our own log
         // for the best backtrack position (see Javadoc above for the reasoning).
         // If termHint is 0, the follower has an empty log or the index was
-        // compacted — just use the raw indexHint.
+        // compacted  - just use the raw indexHint.
         var nextProbeIndex = aer.termHint() > 0 ? log.findConflictEntryByTerm(aer.termHint(), aer.indexHint()).index() : aer.indexHint();
 
         // tryDecrementTo adjusts the peer's next index. It guards against
@@ -1993,20 +2230,20 @@ public class Raft {
         // for a message we didn't send (reordering), it's ignored.
         if (progress.tryDecrementTo(aer.index(), nextProbeIndex)) {
             // If the peer was in Replicate (optimistic pipelining), the
-            // rejection proves our assumption was wrong — the peer's log
+            // rejection proves our assumption was wrong  - the peer's log
             // doesn't match where we thought. Demote to Probe so we find
             // the correct match point one message at a time before resuming
             // the fast pipeline.
             if (progress.replicating()) {
                 progress.becomeProbe();
             }
-            // Immediately retry with the adjusted prevLogIndex — don't wait
+            // Immediately retry with the adjusted prevLogIndex  - don't wait
             // for a heartbeat cycle. Fast convergence matters here.
             trySendAppend(l, aer.from());
         }
     }
 
-    // ────────────────────── APPEND ENTRIES — RECEIVING (Learner/Voter) ──────────────────────
+    /* ==================== APPEND ENTRIES - RECEIVING ==================== */
 
     /**
      * Handles an AppendEntries received while this node is a Learner.
@@ -2090,19 +2327,19 @@ public class Raft {
      * <p>When logs diverge after partitions, the leader-side optimization
      * (see {@link #handleFailedAppend(Leader, Message.AppendEntriesResponse, PeerProgress)})
      * works well when the <i>leader's</i> divergent tail has higher terms
-     * than the follower's — it skips entire term ranges in the leader's
+     * than the follower's  - it skips entire term ranges in the leader's
      * log. But it breaks down when the situation is reversed: the
      * <i>follower's</i> divergent tail has higher terms than the
      * leader's.</p>
      *
      * <p>This can happen after crash/recovery sequences: a follower was
      * briefly elected leader at a higher term, appended entries, then
-     * crashed before committing — those uncommitted entries remain as a
+     * crashed before committing  - those uncommitted entries remain as a
      * high-term divergent tail. In this scenario, the leader-side
      * optimization provides no benefit because the leader's terms in the
-     * divergent region are already low (≤ every follower termHint), so
+     * divergent region are already low (&lt;= every follower termHint), so
      * its backward search immediately lands at the current index every
-     * time — zero skipping, one index per round trip,
+     * time  - zero skipping, one index per round trip,
      * O(divergent entries).</p>
      *
      * <p><b>Example</b> (follower has a high-term divergent tail):</p>
@@ -2114,41 +2351,41 @@ public class Raft {
      *   (common prefix: idx 1-3; divergence: idx 4-12)
      * </pre>
      *
-     * <p><b>With leader-side optimization only</b> — showing the
+     * <p><b>With leader-side optimization only</b>  - showing the
      * degeneration to linear probing:</p>
      *
      * <ol>
      *   <li><b>Round 1:</b> Leader probes at (idx=12, prevLogTerm=8).
-     *       Follower: term at 12 is 7 ≠ 8. Rejects with indexHint=12,
+     *       Follower: term at 12 is 7 != 8. Rejects with indexHint=12,
      *       termHint=7. <br/>
      *       Leader-side: findConflictEntryByTerm(termHint=7, indexHint=12):
      *
      * <pre>
      *     idx 12: leader term=8 &gt; 7, skip
-     *     idx 11: leader term=3 ≤ 7, found!
+     *     idx 11: leader term=3 &lt;= 7, found!
      * </pre>
      *
      *       <p>Leader skipped 1 entry. Probes at idx 11 next.</li>
      *
      *   <li><b>Round 2:</b> Leader probes at (idx=11, prevLogTerm=3).
-     *       Follower: term at 11 is 7 ≠ 3. Rejects with indexHint=11,
+     *       Follower: term at 11 is 7 != 3. Rejects with indexHint=11,
      *       termHint=7. <br/>
      *       Leader-side: findConflictEntryByTerm(termHint=7, indexHint=11):
      *
      * <pre>
-     *     idx 11: leader term=3 ≤ 7, found immediately!
+     *     idx 11: leader term=3 &lt;= 7, found immediately!
      * </pre>
      *
-     *       <b>No skipping</b> — leader's term (3) is already ≤
+     *       <b>No skipping</b>  - leader's term (3) is already &lt;=
      *       termHint (7). Leader moves to idx 10.</li>
      *
      *   <li><b>Round 3:</b> Leader probes at (idx=10, prevLogTerm=3).
-     *       Follower: term at 10 is 7 ≠ 3. Rejects with indexHint=10,
+     *       Follower: term at 10 is 7 != 3. Rejects with indexHint=10,
      *       termHint=7. <br/>
      *       Leader-side: findConflictEntryByTerm(termHint=7, indexHint=10):
      *
      * <pre>
-     *     idx 10: leader term=3 ≤ 7, found immediately!
+     *     idx 10: leader term=3 &lt;= 7, found immediately!
      * </pre>
      *
      *       <b>No skipping again.</b> Leader moves to idx 9.</li>
@@ -2156,40 +2393,40 @@ public class Raft {
      *   <li><b>Rounds 4-9:</b> Same pattern for idx 9, 8, 7, 6, 5, 4.
      *       At each index, leader term is 3, follower's termHint is
      *       always ≥ 4 (follower terms are 4, 5, 6, 7). The leader-side
-     *       search returns the current index immediately every time —
+     *       search returns the current index immediately every time  -
      *       zero skipping.
      *
      * <pre>
-     *   Round 4: idx=9,  leader term=3 ≤ 6 → found immediately
-     *   Round 5: idx=8,  leader term=3 ≤ 6 → found immediately
-     *   Round 6: idx=7,  leader term=3 ≤ 5 → found immediately
-     *   Round 7: idx=6,  leader term=3 ≤ 5 → found immediately
-     *   Round 8: idx=5,  leader term=3 ≤ 4 → found immediately
-     *   Round 9: idx=4,  leader term=3 ≤ 4 → found immediately
+     *   Round 4: idx=9,  leader term=3 &lt;= 6 -> found immediately
+     *   Round 5: idx=8,  leader term=3 &lt;= 6 -> found immediately
+     *   Round 6: idx=7,  leader term=3 &lt;= 5 -> found immediately
+     *   Round 7: idx=6,  leader term=3 &lt;= 5 -> found immediately
+     *   Round 8: idx=5,  leader term=3 &lt;= 4 -> found immediately
+     *   Round 9: idx=4,  leader term=3 &lt;= 4 -> found immediately
      * </pre>
      *
      *       </li>
      *
      *   <li><b>Round 10:</b> Leader probes at idx 3: leader term=2,
-     *       follower term=2 → match!</li>
+     *       follower term=2 -> match!</li>
      * </ol>
      *
-     * <p><b>~10 round trips</b> — the leader-side optimization provided
+     * <p><b>~10 round trips</b>  - the leader-side optimization provided
      * zero benefit from Round 2 onward because the leader's terms (all 3)
-     * are consistently ≤ the follower's termHints (4, 5, 6, 7). The
+     * are consistently &lt;= the follower's termHints (4, 5, 6, 7). The
      * search always lands at the current index. This is still
-     * O(divergent entries) — 9 divergent entries, ~10 round trips.</p>
+     * O(divergent entries)  - 9 divergent entries, ~10 round trips.</p>
      *
      * <h4>The solution: follower-side term-range skipping</h4>
      *
      * <p>The follower can do better than naively returning its last index
      * and term. The key insight: the leader's {@code prevLogTerm} reveals
-     * information about the leader's entire log prefix — since terms
+     * information about the leader's entire log prefix  - since terms
      * only increase within a log, every entry before prevLogIndex in the
-     * leader's log has term ≤ prevLogTerm.</p>
+     * leader's log has term &lt;= prevLogTerm.</p>
      *
      * <p>So the follower searches backward through its OWN log for the
-     * largest index where its term ≤ prevLogTerm. Any follower entry
+     * largest index where its term &lt;= prevLogTerm. Any follower entry
      * with a term <i>higher</i> than prevLogTerm can never match the
      * leader at that position (the leader's term there is at most
      * prevLogTerm). Skip them all.</p>
@@ -2204,20 +2441,20 @@ public class Raft {
      *
      * <ol>
      *   <li><b>Round 1:</b> Leader probes at (idx=12, prevLogTerm=8).
-     *       Follower: term at 12 is 7 ≠ 8. Follower-side:
+     *       Follower: term at 12 is 7 != 8. Follower-side:
      *
      * <pre>
      *   findConflictEntryByTerm(prevLogTerm=8, idx=12):
-     *     idx 12: our term=7 ≤ 8, found immediately!
+     *     idx 12: our term=7 &lt;= 8, found immediately!
      * </pre>
      *
      *       <p>No skipping (prevLogTerm too high). Return indexHint=12,
      *       termHint=7. <br/>
      *       Leader-side: skips idx 12 (term 8 &gt; 7), lands on idx 11
-     *       (term 3 ≤ 7). Probes at idx 11 next.</li>
+     *       (term 3 &lt;= 7). Probes at idx 11 next.</li>
      *
      *   <li><b>Round 2:</b> Leader probes at (idx=11, prevLogTerm=3).
-     *       Follower: term at 11 is 7 ≠ 3. Follower-side:
+     *       Follower: term at 11 is 7 != 3. Follower-side:
      *
      * <pre>
      *   findConflictEntryByTerm(prevLogTerm=3, idx=11):
@@ -2225,14 +2462,14 @@ public class Raft {
      *     idx  9: our term=6 &gt; 3, skip   (term 6 covers idx 8-9)
      *     idx  7: our term=5 &gt; 3, skip   (term 5 covers idx 6-7)
      *     idx  5: our term=4 &gt; 3, skip   (term 4 covers idx 4-5)
-     *     idx  3: our term=2 ≤ 3, found!
+     *     idx  3: our term=2 &lt;= 3, found!
      * </pre>
      *
      *       <p>Return indexHint=3, termHint=2. Jumped from idx 11 to
-     *       idx 3 — skipped 8 entries in one round trip.</li>
+     *       idx 3  - skipped 8 entries in one round trip.</li>
      *
      *   <li><b>Round 3:</b> Leader probes at idx 3: leader term=2,
-     *       our term=2 → <b>match!</b></li>
+     *       our term=2 -> <b>match!</b></li>
      * </ol>
      *
      * <p><b>3 round trips total</b> vs ~10 with leader-side only.</p>
@@ -2248,7 +2485,7 @@ public class Raft {
      * @param ae the incoming AppendEntries (term already verified)
      */
     private void handleAppendEntriesForSameOrHigherTerm(Message.AppendEntries ae) throws StorageException {
-        // prevLogIndex is already committed — this is a stale or duplicate
+        // prevLogIndex is already committed  - this is a stale or duplicate
         // message. The follower already has those entries (and possibly more).
         // Respond with success so the leader can advance its tracking.
         // We send our committed index as the last matched index because
@@ -2270,7 +2507,7 @@ public class Raft {
             return;
         }
 
-        // Log consistency check failed — our log diverges from the leader's.
+        // Log consistency check failed  - our log diverges from the leader's.
         // Provide optimized hints via findConflictEntryByTerm so the leader
         // can find the match point in O(distinct terms) instead of O(entries).
         // See this method's Javadoc for the full follower-side optimization
@@ -2280,7 +2517,7 @@ public class Raft {
         send(new Message.AppendEntriesResponse(ae.from(), id, term, false, ae.prevLogIndex(), conflictingEntry.term(), conflictingEntry.index()));
     }
 
-    // ────────────────────── QUORUM CHECK ──────────────────────
+    /* ==================== QUORUM CHECK ==================== */
 
     /**
      * Verifies that the leader still has the support of a majority of
@@ -2313,18 +2550,18 @@ public class Raft {
      *       Follower.</li>
      * </ol>
      *
-     * <p><b>Example — 5-node cluster {A, B, C, D, E}, A is
+     * <p><b>Example  - 5-node cluster {A, B, C, D, E}, A is
      * leader:</b></p>
      *
      * <pre>
      *   Before check: A=active(self), B=active, C=active, D=inactive, E=inactive
      *   Votes: {A=true, B=true, C=true, D=false, E=false}
-     *   Result: 3/5 active → WON → leader stays
-     *   After check: all peer flags reset → B=inactive, C=inactive, D=inactive, E=inactive
+     *   Result: 3/5 active -> WON -> leader stays
+     *   After check: all peer flags reset -> B=inactive, C=inactive, D=inactive, E=inactive
      *
      *   If B and C also become unresponsive before next check:
      *   Votes: {A=true, B=false, C=false, D=false, E=false}
-     *   Result: 1/5 active → LOST → leader steps down
+     *   Result: 1/5 active -> LOST -> leader steps down
      * </pre>
      */
     private void checkQuorum(Leader l) {
@@ -2334,7 +2571,7 @@ public class Raft {
         }
     }
 
-    // ────────────────────── HANDLING HEARTBEAT ──────────────────────
+    /* ==================== HANDLING HEARTBEAT ==================== */
 
     /**
      * Broadcasts a heartbeat to every peer in the cluster (excluding
@@ -2360,7 +2597,7 @@ public class Raft {
      *       (see {@link ReadIndex}).</li>
      * </ol>
      *
-     * <p>The seq is obtained via {@link Leader#nextHeartbeatSeq()} — a
+     * <p>The seq is obtained via {@link Leader#nextHeartbeatSeq()}  - a
      * single increment per broadcast ensures all peers in this round
      * carry the same seq, and multiple reads batched between broadcasts
      * share the same confirmation round.</p>
@@ -2391,7 +2628,7 @@ public class Raft {
      *
      * @param l      the current leader role state
      * @param target the peer to send the heartbeat to
-     * @param seq    the heartbeat sequence number — echoed by the
+     * @param seq    the heartbeat sequence number  - echoed by the
      *               follower in its response for read index correlation
      */
     private void sendHeartbeat(Leader l, NodeId target, long seq) {
@@ -2425,7 +2662,7 @@ public class Raft {
      *
      * <p>For Candidates and PreCandidates receiving a same-or-higher
      * term heartbeat, {@code becomeFollower} causes them to abandon
-     * their election — a leader already exists for this term.</p>
+     * their election  - a leader already exists for this term.</p>
      */
     private void handleHeartbeatForVoter(Message.Heartbeat hb) throws StorageException {
         // Lower term: stale heartbeat from a deposed leader.
@@ -2468,7 +2705,7 @@ public class Raft {
      *
      * <ul>
      *   <li><b>Lower term:</b> Stale response from a previous term.
-     *       Silently dropped — no useful information can be extracted
+     *       Silently dropped  - no useful information can be extracted
      *       from it.</li>
      *   <li><b>Higher term:</b> Another node has been elected leader.
      *       Step down to Follower.</li>
@@ -2478,7 +2715,7 @@ public class Raft {
      * <p><b>Same-term processing:</b></p>
      *
      * <ol>
-     *   <li><b>Mark active:</b> The peer is alive and reachable — mark
+     *   <li><b>Mark active:</b> The peer is alive and reachable  - mark
      *       it active for quorum checks (see
      *       {@link #checkQuorum(Leader)}).</li>
      *   <li><b>Resume flow:</b> If the peer was paused (e.g., Probe
@@ -2542,13 +2779,13 @@ public class Raft {
 
     }
 
-    // ────────────────────── SNAPSHOT HANDLING ──────────────────────
+    /* ==================== SNAPSHOT HANDLING ==================== */
 
     /**
      * Sends a snapshot to a peer that is too far behind for log-based
      * replication.
      *
-     * <p>Only attempted if the peer is recently active — there's no
+     * <p>Only attempted if the peer is recently active  - there's no
      * point sending a potentially large snapshot to a peer that isn't
      * responding.</p>
      *
@@ -2574,7 +2811,7 @@ public class Raft {
             send(new Message.InstallSnapshot(target, id, term, snapshot));
             return true;
         } catch (SnapshotUnavailableException e) {
-            // Snapshot not ready yet — the storage may be preparing it asynchronously.
+            // Snapshot not ready yet  - the storage may be preparing it asynchronously.
             // The peer will remain in its current state and we'll retry later
             // (typically on the next heartbeat cycle).
             return false;
@@ -2588,7 +2825,7 @@ public class Raft {
      * ({@link #handleInstallSnapshotForVoter(Message.InstallSnapshot)}),
      * except we stay as a Learner (via {@code becomeLearner}) instead
      * of transitioning to Follower. Learners are the most common
-     * snapshot recipients — they're typically new nodes catching up on
+     * snapshot recipients  - they're typically new nodes catching up on
      * the log.</p>
      *
      * @param l  the current learner role
@@ -2619,7 +2856,7 @@ public class Raft {
      * leader is alive) and the leader identity is confirmed.</p>
      *
      * <p>For Candidate/PreCandidate: receiving a snapshot proves a
-     * leader exists in this term — the node steps down to Follower and
+     * leader exists in this term  - the node steps down to Follower and
      * applies the snapshot, just like it would for an
      * AppendEntries.</p>
      *
@@ -2651,11 +2888,11 @@ public class Raft {
      *       adopted via {@link #restoreSnapshotMembership} which
      *       triggers role-specific side effects (e.g. follower demoted
      *       to learner, learner promoted to voter). Respond with
-     *       {@code lastIndex()} — the leader uses this to advance
+     *       {@code lastIndex()}  - the leader uses this to advance
      *       the peer's match index to the snapshot point.</li>
      *   <li><b>Not restored</b> (tryRestore returned false): the
      *       snapshot was stale, redundant, or rejected. Respond with
-     *       {@code committed} — tells the leader where this node
+     *       {@code committed}  - tells the leader where this node
      *       currently stands so it can resume normal replication from
      *       that point.</li>
      * </ul>
@@ -2725,17 +2962,17 @@ public class Raft {
      * <ol>
      *   <li><b>Already committed:</b> the snapshot's index is at or
      *       behind our committed index. We already have all those
-     *       entries committed and possibly applied — the snapshot is
+     *       entries committed and possibly applied  - the snapshot is
      *       stale. Return false.</li>
      *   <li><b>Not a member:</b> this node is not in the snapshot's
      *       membership (not a voter, not a learner). This is a
-     *       defense-in-depth check — it should never happen in normal
+     *       defense-in-depth check  - it should never happen in normal
      *       operation, but if it did (e.g., the node was removed from
      *       the cluster), applying the snapshot would leave the node
      *       in an inconsistent state. Return false.</li>
      *   <li><b>Log already matches:</b> we have an entry at the
      *       snapshot's index with the same term. Our log is consistent
-     *       with the snapshot up to that point — no need to replace
+     *       with the snapshot up to that point  - no need to replace
      *       it. Just fast-forward the commit index to the snapshot's
      *       index. Return false.</li>
      *   <li><b>Full restore:</b> our log diverges from the snapshot
@@ -2763,7 +3000,7 @@ public class Raft {
             return false;
         }
 
-        // Our log already has this entry with the correct term — we're
+        // Our log already has this entry with the correct term  - we're
         // consistent up to the snapshot point. Just advance the commit
         // index without replacing the log (avoids discarding entries
         // beyond the snapshot that are still valid).
@@ -2779,7 +3016,7 @@ public class Raft {
     /**
      * Handles local feedback about the outcome of a snapshot delivery.
      *
-     * <p>This is NOT a network message — it's local feedback from the
+     * <p>This is NOT a network message  - it's local feedback from the
      * application/transport layer on the same node that sent the
      * snapshot. After the leader sends an
      * {@link Message.InstallSnapshot}, the peer transitions to Snapshot
@@ -2792,11 +3029,11 @@ public class Raft {
      *   <li><b>Success:</b> the snapshot was delivered. Transition to
      *       Probe starting from {@code snapshotIndex + 1}. The peer
      *       will send an AppendEntriesResponse after it applies the
-     *       snapshot — that response will confirm the match point and
+     *       snapshot  - that response will confirm the match point and
      *       trigger a transition to Replicate for fast pipelining.</li>
      *   <li><b>Failure:</b> the delivery failed (network error, peer
      *       rejected it, etc.). Reset to Probe starting from
-     *       {@code match + 1} — we go back to the last confirmed
+     *       {@code match + 1}  - we go back to the last confirmed
      *       match point since the snapshot was never applied.</li>
      * </ul>
      *
@@ -2829,7 +3066,7 @@ public class Raft {
             progress.snapshotFailed();
         }
 
-        // Pause after both success and failure — don't send AppendEntries
+        // Pause after both success and failure  - don't send AppendEntries
         // until we have a reason to resume (peer's response or next heartbeat).
         progress.pauseStateIfResumed();
     }
@@ -2837,7 +3074,7 @@ public class Raft {
     /**
      * Handles local feedback that a peer is unreachable.
      *
-     * <p>This is NOT a network message — it's local feedback from the
+     * <p>This is NOT a network message  - it's local feedback from the
      * transport layer when it fails to deliver a message to a peer
      * (connection refused, timeout, etc.).</p>
      *
@@ -2849,7 +3086,7 @@ public class Raft {
      * for an unreliable connection.</p>
      *
      * <p>If the peer is already in Probe (already conservative) or
-     * Snapshot (waiting for snapshot to complete), this is a no-op —
+     * Snapshot (waiting for snapshot to complete), this is a no-op  -
      * those states are already prepared for communication
      * failures.</p>
      *
@@ -2867,24 +3104,24 @@ public class Raft {
         }
     }
 
-    // ───────────────────── LEADERSHIP TRANSFER ──────────────────────────────
+    /* ==================== LEADERSHIP TRANSFER ==================== */
 
     /**
      * Handles a leadership transfer request at the Leader.
      *
      * <p>The application sends {@code TransferLeadership} to gracefully
      * move leadership to a specific voter. The leader does not respond
-     * to the application — the transfer outcome is observable by
+     * to the application  - the transfer outcome is observable by
      * watching who becomes the next leader (via a new leader's
      * {@code AppendEntries}).</p>
      *
      * <p><b>Validation sequence:</b></p>
      *
      * <ol>
-     *   <li>Self-transfer — transferring to yourself is a no-op</li>
-     *   <li>Unknown/learner — only voters in the current config can
+     *   <li>Self-transfer  - transferring to yourself is a no-op</li>
+     *   <li>Unknown/learner  - only voters in the current config can
      *       become leader</li>
-     *   <li>Duplicate — if a transfer to the same target is already in
+     *   <li>Duplicate  - if a transfer to the same target is already in
      *       progress, don't restart the process</li>
      * </ol>
      *
@@ -2892,14 +3129,14 @@ public class Raft {
      * the target and resets the quorum check timer, giving the
      * transferee a full election-timeout window to catch up. If a
      * transfer was already in progress to a <em>different</em> target,
-     * it is implicitly aborted — the new target overwrites the old
+     * it is implicitly aborted  - the new target overwrites the old
      * one.</p>
      *
      * <p><b>Catch-up or immediate handoff:</b></p>
      *
      * <ul>
      *   <li><b>Caught up</b> ({@code progress.match() == lastIndex}):
-     *       send {@code TimeoutNow} immediately — the transferee
+     *       send {@code TimeoutNow} immediately  - the transferee
      *       starts its election</li>
      *   <li><b>Behind</b>: send {@code AppendEntries} to replicate the
      *       missing entries. When the transferee's
@@ -2937,10 +3174,10 @@ public class Raft {
         l.transferLeadership(tl.transferee());
 
         if (progress.match() == log.lastIndex()) {
-            // Transferee is caught up — tell it to start its election now.
+            // Transferee is caught up  - tell it to start its election now.
             send(new Message.TimeoutNow(tl.transferee(), id, term));
         } else {
-            // Transferee is behind — replicate missing entries first.
+            // Transferee is behind  - replicate missing entries first.
             trySendAppend(l, tl.transferee());
         }
     }
@@ -2948,12 +3185,12 @@ public class Raft {
     /**
      * Handles a {@code TransferLeadership} request at a Follower.
      *
-     * <p>Followers cannot process leadership transfers — only the
+     * <p>Followers cannot process leadership transfers  - only the
      * leader can. If a leader is known, the request is forwarded to it.
      * If no leader is known (e.g., during an election), the request is
      * dropped because there is no one to forward to.</p>
      *
-     * @param f  the current follower role
+     * @param r  the replicant role (follower or learner)
      * @param tl the transfer request to forward
      */
     private void handleLeadershipTransfer(Replicant r, Message.TransferLeadership tl) {
@@ -2964,7 +3201,7 @@ public class Raft {
     }
 
 
-    // ────────────────────── MEMBERSHIP CHANGE — PROPOSAL HANDLING ──────────────────────
+    /* ==================== MEMBERSHIP CHANGE - PROPOSAL HANDLING ==================== */
 
     /**
      * Handles a membership change proposal (add voter, add learner, or
@@ -2979,11 +3216,11 @@ public class Raft {
      * <p>Guards enforced before the entry is appended:</p>
      *
      * <ol>
-     *   <li>Common gates via {@link #canProceedMembershipChange} —
+     *   <li>Common gates via {@link #canProceedMembershipChange}  -
      *       leader must have self-progress, no leadership transfer in
      *       progress, and no pending (unapplied) config change.</li>
      *   <li>Must <b>not</b> be in joint consensus. Proposing a new
-     *       membership change while already in joint is invalid — the
+     *       membership change while already in joint is invalid  - the
      *       cluster must first complete the current transition via
      *       leave-joint.</li>
      * </ol>
@@ -3005,7 +3242,7 @@ public class Raft {
     }
 
     /**
-     * Handles a leave-joint proposal — the <b>second phase</b> of a
+     * Handles a leave-joint proposal  - the <b>second phase</b> of a
      * two-phase membership change.
      *
      * <p>Leave-joint drops the old (outgoing) voter set and promotes
@@ -3041,6 +3278,14 @@ public class Raft {
         appendMembershipEntry(l, new Entry.LeaveJoint(term, membershipChangeIndex), membershipChangeIndex);
     }
 
+    /**
+     * Forwards a membership change proposal to the leader on behalf of
+     * a replicant (follower or learner).
+     *
+     * @param r   the replicant role
+     * @param mcp the membership change proposal
+     * @throws StorageException if a log read fails
+     */
     private void handleMembershipChange(Replicant r, Message.MembershipChangeProposal mcp) throws StorageException {
         if (!canForwardMembershipChangeProposal(r.hasLeader())) {
             return;
@@ -3050,6 +3295,13 @@ public class Raft {
     }
 
 
+    /**
+     * Forwards a leave-joint proposal to the leader on behalf of a
+     * replicant (follower or learner).
+     *
+     * @param r the replicant role
+     * @throws StorageException if a log read fails
+     */
     private void handleLeaveJoint(Replicant r) throws StorageException {
         if (!canForwardMembershipChangeProposal(r.hasLeader())) {
             return;
@@ -3065,12 +3317,12 @@ public class Raft {
      * <p>Three conditions must hold:</p>
      *
      * <ul>
-     *   <li>The leader must have progress for itself — a sanity check
+     *   <li>The leader must have progress for itself  - a sanity check
      *       that it is properly initialized.</li>
-     *   <li>No leadership transfer is in progress — config changes
+     *   <li>No leadership transfer is in progress  - config changes
      *       during a transfer could leave the transferee with a stale
      *       config.</li>
-     *   <li>No pending (unapplied) config change in the log — Raft
+     *   <li>No pending (unapplied) config change in the log  - Raft
      *       allows at most one config change in flight. The applied
      *       index must have caught up to
      *       {@code membershipChangeIndex}.</li>
@@ -3102,8 +3354,8 @@ public class Raft {
      *
      * <p>If the append succeeds (entry fits within the uncommitted
      * size limit), the leader records the entry's index as the pending
-     * membership change index — blocking further config proposals
-     * until this one is applied — and broadcasts the new entry to all
+     * membership change index  - blocking further config proposals
+     * until this one is applied  - and broadcasts the new entry to all
      * peers.</p>
      *
      * <p>If the append fails (uncommitted size exceeded), the proposal
@@ -3124,7 +3376,7 @@ public class Raft {
         }
     }
 
-    // ────────────────────── MEMBERSHIP CHANGE — APPLY (COMMIT-TIME) ──────────────────────
+    /* ==================== MEMBERSHIP CHANGE - APPLY ==================== */
 
     /**
      * Handles a committed membership change fed back from the engine
@@ -3132,11 +3384,11 @@ public class Raft {
      *
      * <p>Two steps: (1) apply the change to the membership config via
      * {@link #applyMembershipChange}, (2) trigger role-specific side
-     * effects via {@link #switchMembership} — leader reconciles
+     * effects via {@link #switchMembership}  - leader reconciles
      * progress, follower/learner checks for promotion/demotion.</p>
      *
      * <p>For Candidate/PreCandidate the config is updated but no
-     * role switch occurs — the election outcome will determine the
+     * role switch occurs  - the election outcome will determine the
      * next role.</p>
      *
      * @param l   the current leader role (used for progress reconciliation)
@@ -3222,7 +3474,7 @@ public class Raft {
      * <p>Creates a short-lived {@link MembershipChanger} with the
      * current config, executes the protocol (which decides simple vs.
      * joint), and switches to the resulting config. Called on
-     * <b>every</b> node — leader, follower, learner — when the entry
+     * <b>every</b> node  - leader, follower, learner  - when the entry
      * is applied to the state machine.</p>
      *
      * @param mc the membership changes from the committed entry
@@ -3254,7 +3506,7 @@ public class Raft {
      * <ol>
      *   <li><b>Progress reconciliation</b>: delegates to
      *       {@link Leader#applyNewMembership} which rebuilds the
-     *       progress map to match the new config — adding new peers,
+     *       progress map to match the new config  - adding new peers,
      *       updating roles, and dropping removed peers.</li>
      *   <li><b>Self-removal check</b>: if the leader is no longer a
      *       member (e.g. removed in a simple change), it steps down to
@@ -3270,7 +3522,7 @@ public class Raft {
      *       added peers so they can catch up.</li>
      *   <li><b>Transfer abort</b>: if a leadership transfer was in
      *       progress and the transferee is no longer a voter (removed
-     *       or demoted), the transfer is aborted — a non-voter cannot
+     *       or demoted), the transfer is aborted  - a non-voter cannot
      *       become leader.</li>
      * </ol>
      */
@@ -3325,7 +3577,7 @@ public class Raft {
         }
     }
 
-    // ────────────────────── LINEARIZABLE READS ──────────────────────
+    /* ==================== LINEARIZABLE READS ==================== */
 
     /**
      * Responds to a confirmed read index request.
@@ -3334,7 +3586,7 @@ public class Raft {
      *
      * <ul>
      *   <li><b>Local (from == this node):</b> add to
-     *       {@code readsAwaitingApply} — released to the output
+     *       {@code readsAwaitingApply}  - released to the output
      *       buffer once the applied index catches up.</li>
      *   <li><b>Remote (a follower forwarded the read):</b> send a
      *       {@code ReadIndexResponse} message back. The follower then
@@ -3384,7 +3636,7 @@ public class Raft {
      * the commit index). If {@code committedInCurrentTerm()} is now
      * true, drains the deferred messages from {@link Leader} and
      * reprocesses each one through
-     * {@link #handleReadIndex(Leader, Message.ReadIndex)} — which will
+     * {@link #handleReadIndex(Leader, Message.ReadIndex)}  - which will
      * now proceed past the deferral check and register them as pending
      * reads.</p>
      *
@@ -3409,7 +3661,7 @@ public class Raft {
      *
      * <ol>
      *   <li><b>Singleton cluster:</b> the leader is trivially the only
-     *       voter. No heartbeat confirmation needed — respond
+     *       voter. No heartbeat confirmation needed  - respond
      *       immediately with the current commit index.</li>
      *   <li><b>Not committed in current term:</b> the leader's commit
      *       index may be stale. Defer the request until the first
@@ -3418,7 +3670,7 @@ public class Raft {
      *       commit index and confirm leadership per the configured
      *       mode:
      *       <ul>
-     *         <li>{@code LEASE}: respond immediately — the leader
+     *         <li>{@code LEASE}: respond immediately  - the leader
      *             trusts its lease (quorum was contacted within the
      *             election timeout window).</li>
      *         <li>{@code HEARTBEAT_TIMEOUT}: register the read and
@@ -3432,7 +3684,7 @@ public class Raft {
      * </ol>
      *
      * <p>Note: the {@code readIndex} stored for each pending read is
-     * {@code log.committed()} at registration time — not the index the
+     * {@code log.committed()} at registration time  - not the index the
      * application asked for. The leader guarantees that all entries up
      * to this index are committed and will not be overwritten.</p>
      */
@@ -3459,17 +3711,20 @@ public class Raft {
     }
 
     /**
-     * Handles a read index request on a Follower.
+     * Handles a read index request on a replicant (follower or learner).
      *
-     * <p>Followers cannot serve linearizable reads on their own — they
+     * <p>Replicants cannot serve linearizable reads on their own - they
      * don't know if the leader's commit index is authoritative. The
      * request is forwarded to the leader, which will confirm its
      * authority and respond via {@code ReadIndexResponse}.</p>
      *
-     * <p>If the follower doesn't know the leader (e.g., during an
+     * <p>If the replicant doesn't know the leader (e.g., during an
      * election or after a restart before receiving a heartbeat), the
      * request is dropped and the application should be notified so it
      * can retry or return an error to the client.</p>
+     *
+     * @param r  the replicant role
+     * @param ri the read index request
      */
     private void handleReadIndex(Replicant r, Message.ReadIndex ri) {
         if (!r.hasLeader()) {
@@ -3486,7 +3741,7 @@ public class Raft {
      *
      * <p>The leader confirmed its authority and is telling this node
      * that the read is safe at the given index. The node adds it to
-     * {@code readsAwaitingApply} — it will be surfaced in the output
+     * {@code readsAwaitingApply}  - it will be surfaced in the output
      * once the local applied index reaches the read index.</p>
      */
     private void handleReadIndexResponse(Message.ReadIndexResponse rir) {
@@ -3500,7 +3755,7 @@ public class Raft {
      * has caught up.
      *
      * <p>Called from two trigger points: (1) when a read is first
-     * confirmed (heartbeat majority or leader response) — in case
+     * confirmed (heartbeat majority or leader response)  - in case
      * applied already covers the index, and (2) when
      * {@code appliedTo} advances the applied watermark. The queue is
      * FIFO-ordered by non-decreasing index, so draining stops at the
@@ -3512,11 +3767,11 @@ public class Raft {
         }
     }
 
-    // ────────────────────── FORGET LEADER ──────────────────────
+    /* ==================== FORGET LEADER ==================== */
 
     /**
-     * Handles ForgetLeader on a Follower — clears the known leader,
-     * making this node a leaderless follower in the same term.
+     * Handles ForgetLeader on a replicant - clears the known leader,
+     * making this node leaderless in the same term.
      *
      * <p>The node stays in the current term and does not campaign. It
      * will:</p>
@@ -3534,9 +3789,11 @@ public class Raft {
      * lease. Lease reads depend on that rejection to guarantee no new
      * leader is elected during the lease window. Allowing ForgetLeader
      * would let a new leader be elected while the old leader still
-     * serves lease reads — violating linearizability. These two
+     * serves lease reads  - violating linearizability. These two
      * mechanisms are fundamentally incompatible: ForgetLeader exists
      * to skip the timeout, but lease safety requires honoring it.</p>
+     *
+     * @param r the replicant role
      */
     private void forgetLeader(Replicant r) {
         if (config.readIndexMode() == ReadIndexMode.LEASE) {
@@ -3545,7 +3802,7 @@ public class Raft {
         r.forgetLeader();
     }
 
-    // ────────────────────── STORAGE ACKNOWLEDGMENTS ──────────────────────
+    /* ==================== STORAGE ACKNOWLEDGMENTS ==================== */
 
     /**
      * Advances the log's applied watermark.
@@ -3598,7 +3855,7 @@ public class Raft {
      * ack ({@code appliedTo}) happen in one step.</p>
      *
      * <p><b>Not term-gated.</b> Snapshots carry committed state which is
-     * immutable across term changes — safe to apply regardless of whether
+     * immutable across term changes  - safe to apply regardless of whether
      * the term changed since the persist was requested.</p>
      *
      * @param snapshot the snapshot that was persisted
@@ -3627,15 +3884,15 @@ public class Raft {
      *
      * <p>Two guards protect against incorrect truncation:</p>
      * <ul>
-     *   <li>{@code logIndex != 0} — zero means no entry info (only a hard
+     *   <li>{@code logIndex != 0}  - zero means no entry info (only a hard
      *       state update or snapshot). Nothing to stabilize.</li>
-     *   <li>{@code term == currentTerm} — ABA protection. If the term changed,
+     *   <li>{@code term == currentTerm}  - ABA protection. If the term changed,
      *       the entries at these indexes may have been overwritten by a new
      *       leader. Truncating based on a stale ack causes an inconsistent
      *       view between the unstable log and stable storage.</li>
      * </ul>
      *
-     * <h4>ABA example — stale persistence ack after leadership changes</h4>
+     * <h4>ABA example  - stale persistence ack after leadership changes</h4>
      *
      * <p>Cluster: {A, B, C, D, E}. A is leader (term 2). Focus on B
      * (follower) and its async persistence pipeline.</p>
@@ -3669,13 +3926,13 @@ public class Raft {
      * <h4>Without term check</h4>
      * <ol>
      *   <li>LogPersisted says (logIndex=3, logTerm=2).</li>
-     *   <li>B's current unstable last entry is (idx=3, term=2) — MATCHES.</li>
+     *   <li>B's current unstable last entry is (idx=3, term=2)  - MATCHES.</li>
      *   <li>stableTo succeeds, unstable truncated (entries removed from memory).</li>
      *   <li>The queued write [(idx=2, term=3), (idx=3, term=3)] executes next
      *       and overwrites disk.</li>
      *   <li>Now B's unstable is empty and disk has (idx=2, term=3), (idx=3, term=3).
-     *       But the correct entries — (idx=2, term=2), (idx=3, term=2) from
-     *       the current leader — are gone from memory (truncated) and not yet
+     *       But the correct entries  - (idx=2, term=2), (idx=3, term=2) from
+     *       the current leader  - are gone from memory (truncated) and not yet
      *       on disk (the last queued write hasn't run).</li>
      *   <li><b>INCONSISTENT</b>: B's unstable is empty and disk has the wrong
      *       entries. Any log read in this window sees stale data.</li>
@@ -3690,17 +3947,17 @@ public class Raft {
      *   <li>B's correct last log entry: (idx=3, t=2)</li>
      * </ul>
      *
-     * <p><b>Safety violation — state machine divergence:</b></p>
+     * <p><b>Safety violation  - state machine divergence:</b></p>
      * <ol>
-     *   <li>A (term 4 leader) commits — no-op at idx=4 reaches majority.
+     *   <li>A (term 4 leader) commits  - no-op at idx=4 reaches majority.
      *       B also has entry 4 in unstable.</li>
-     *   <li>Write #2 completes — disk overwrites to
+     *   <li>Write #2 completes  - disk overwrites to
      *       [(idx=2, t=3), (idx=3, t=3)].</li>
-     *   <li>A sends heartbeat with leaderCommit=4 — reaches B and some
+     *   <li>A sends heartbeat with leaderCommit=4  - reaches B and some
      *       nodes, but not all.</li>
-     *   <li>B applies entries 2-3 from log — unstable is empty, falls
-     *       through to disk — gets C's uncommitted term 3 entries.</li>
-     *   <li>Applying watermark advances — entries 2-3 are never re-applied
+     *   <li>B applies entries 2-3 from log  - unstable is empty, falls
+     *       through to disk  - gets C's uncommitted term 3 entries.</li>
+     *   <li>Applying watermark advances  - entries 2-3 are never re-applied
      *       on B.</li>
      *   <li>Write #3 eventually corrects B's disk, but B's state machine
      *       already consumed the wrong data.</li>
@@ -3708,56 +3965,56 @@ public class Raft {
      * <p><b>Result:</b> B's state machine permanently diverges from the
      * rest of the cluster.</p>
      *
-     * <p><b>Safety violation — cascading divergence if B becomes leader:</b></p>
+     * <p><b>Safety violation  - cascading divergence if B becomes leader:</b></p>
      * <ol>
-     *   <li>A crashes. B wins election at term 5 — either because B has
+     *   <li>A crashes. B wins election at term 5  - either because B has
      *       entry 4 (idx=4, t=4) matching other nodes, or because B's
      *       inflated last term (3) wins votes over others' (2).</li>
      *   <li>B appends no-op at idx=5 (term=5).</li>
-     *   <li>B replicates its log. Entries 2-3 read from disk → wrong
+     *   <li>B replicates its log. Entries 2-3 read from disk -> wrong
      *       (t=3). Overwrites followers' correct entries.</li>
      *   <li>Nodes that received leaderCommit from A already applied correct
-     *       entries. Applied watermark prevents reapply — but their logs
+     *       entries. Applied watermark prevents reapply  - but their logs
      *       and state machines are now inconsistent.</li>
      *   <li>Nodes that did NOT receive leaderCommit accept B's wrong
      *       entries. When B sends leaderCommit, they apply wrong entries
-     *       — state machines diverge.</li>
+     *        - state machines diverge.</li>
      *   <li>Write #3 eventually corrects B's disk, but B already
      *       replicated the wrong entries.</li>
      * </ol>
-     * <p><b>Result:</b> Mixed corruption across the cluster — B and some
+     * <p><b>Result:</b> Mixed corruption across the cluster  - B and some
      * nodes have wrong state machines, other nodes have correct state
      * machines but wrong logs. This requires write #3 (the correct term 4
-     * entries) to take longer than the election timeout — possible with
+     * entries) to take longer than the election timeout  - possible with
      * batched writes or a slow downstream storage system.</p>
      *
-     * <p><b>Safety violation — incorrect vote rejection:</b></p>
+     * <p><b>Safety violation  - incorrect vote rejection:</b></p>
      * <ol>
      *   <li>A (term 4 leader) crashes before sending no-op at idx=4 to B.
-     *       B's last entry is (idx=3, t=3) from disk — inflated.</li>
+     *       B's last entry is (idx=3, t=3) from disk  - inflated.</li>
      *   <li>D starts election at term 5. D's log is correct: last entry
      *       (idx=3, t=2).</li>
      *   <li>D sends RequestVote to B. Vote comparison: higher last term
      *       wins, if tied higher index wins.</li>
-     *   <li>B sees its last term as 3 (wrong), D's last term is 2 —
+     *   <li>B sees its last term as 3 (wrong), D's last term is 2  -
      *       rejects D as less up-to-date.</li>
      *   <li>Correct last terms are equal (both 2), equal indexes (both 3)
-     *       — B should grant.</li>
+     *        - B should grant.</li>
      * </ol>
      * <p><b>Result:</b> If B's vote was needed for majority (3 of 5), D's
-     * election fails — availability loss. B's inflated last term makes it
+     * election fails  - availability loss. B's inflated last term makes it
      * reject candidates that are equally or more qualified.</p>
      *
      * <h4>With term check</h4>
      * <ol>
      *   <li>LogPersisted(term=2) arrives. term (2) != B's current term (4)
-     *       → entry stability IGNORED. Unstable stays intact.</li>
+     *       -> entry stability IGNORED. Unstable stays intact.</li>
      *   <li>Queued write [(idx=2, term=3), (idx=3, term=3)] completes.
      *       LogPersisted(term=3) arrives. term (3) != B's current term (4)
-     *       → IGNORED again. Unstable still intact.</li>
+     *       -> IGNORED again. Unstable still intact.</li>
      *   <li>Queued write [(idx=2, term=2), (idx=3, term=2)] completes.
      *       LogPersisted(term=4) arrives. term (4) == B's current term (4)
-     *       → stableTo succeeds. Disk and unstable are now consistent.</li>
+     *       -> stableTo succeeds. Disk and unstable are now consistent.</li>
      * </ol>
      *
      * <p>When both guards pass, delegates to {@code log.stableTo(logTerm, logIndex)}
@@ -3773,7 +4030,7 @@ public class Raft {
     }
 
     /**
-     * Handles LogPersisted as leader — entry stability (term-gated) and
+     * Handles LogPersisted as leader  - entry stability (term-gated) and
      * snapshot application with auto-leave-joint check.
      *
      * @param l  the current leader state
@@ -3785,7 +4042,7 @@ public class Raft {
     }
 
     /**
-     * Handles LogPersisted for non-leader roles — no auto-leave-joint.
+     * Handles LogPersisted for non-leader roles  - no auto-leave-joint.
      *
      * @param lp the persistence acknowledgment
      */
@@ -3795,7 +4052,7 @@ public class Raft {
     }
 
     /**
-     * Handles AppliedToStateMachine as leader — advances applied watermark,
+     * Handles AppliedToStateMachine as leader  - advances applied watermark,
      * checks auto-leave-joint, and frees uncommitted entry quota.
      *
      * @param l   the current leader state
@@ -3812,7 +4069,7 @@ public class Raft {
     }
 
     /**
-     * Handles AppliedToStateMachine for non-leader roles — watermark only.
+     * Handles AppliedToStateMachine for non-leader roles  - watermark only.
      *
      * @param asm the state machine apply acknowledgment
      */

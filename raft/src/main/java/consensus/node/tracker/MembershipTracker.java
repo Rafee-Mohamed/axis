@@ -1,7 +1,8 @@
-package consensus.node;
+package consensus.node.tracker;
 
 import consensus.engine.RaftInput;
 import consensus.engine.VolatileState;
+import consensus.node.StateChangeException;
 import consensus.storage.Entry;
 
 import java.util.List;
@@ -25,10 +26,10 @@ import java.util.concurrent.CompletableFuture;
  * <pre>
  *                submit(F)                  entry in               ApplyMembership
  *                                         entriesToApply           stepped into Raft
- *   empty ──────────────────► pending(F) ────────────────► confirmed(F) ────────────► F.complete(null)
- *                                 │                            │                       back to empty
- *                                 │ state change               │ state change
- *                                 ▼                            ▼
+ *   empty -----------------> pending(F) -----------------> confirmed(F) -----------------> F.complete(null)
+ *                                 |                            |                            back to empty
+ *                                 | state change               | state change
+ *                                 v                            v
  *                        F.completeExceptionally()       preserved (no-op)
  *                           back to empty
  * </pre>
@@ -73,10 +74,10 @@ import java.util.concurrent.CompletableFuture;
  */
 public class MembershipTracker {
 
-    // Future for a locally proposed membership change not yet committed
+    /** Future for a locally proposed membership change not yet committed. */
     private Optional<CompletableFuture<Void>> pending;
 
-    // Future for a committed membership change waiting for apply
+    /** Future for a committed membership change waiting for apply. */
     private Optional<CompletableFuture<Void>> confirmed;
 
     public MembershipTracker() {
@@ -170,7 +171,7 @@ public class MembershipTracker {
      * Fails the pending future on a role transition.
      *
      * <p>Only pending (uncommitted) futures are failed. Confirmed
-     * futures are preserved -- the committed entry will be applied
+     * futures are preserved - the committed entry will be applied
      * regardless of role changes.</p>
      *
      * @param volatileState present if a role change occurred
@@ -188,6 +189,12 @@ public class MembershipTracker {
         pending = Optional.empty();
     }
 
+    /**
+     * Fails all tracked futures (both pending and confirmed) with the
+     * given cause. Used during node shutdown.
+     *
+     * @param t the failure cause
+     */
     public void failAll(Throwable t) {
         pending.ifPresent(f -> f.completeExceptionally(t));
         confirmed.ifPresent(f -> f.completeExceptionally(t));

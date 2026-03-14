@@ -5,72 +5,115 @@ import consensus.core.Snapshot;
 import java.util.List;
 
 /**
- * Readonly Storage interface for persisted Raft Log.
+ * Read-only interface over the persisted Raft log.
  *
- * Implemented by the application to provide:
- * - Persisted log entries
- * - Hard state (term, vote, commit)
- * - Snapshots
+ * <p>Implemented by the application to expose persisted log entries,
+ * hard state (term, vote), and snapshots. The protocol reads from
+ * this interface but never writes to it - write operations (append,
+ * compact, apply snapshot) are performed by the application when
+ * processing {@link consensus.engine.RaftOutput}.</p>
  *
- * The Storage provides READ access to persisted data.
- * WRITE operations (append, compact) are done by application
- * when processing Ready output.
+ * <h2>Persisted Log Structure</h2>
+ * <pre>
+ *              [Snapshot]
+ *                  |
+ *                  v
+ *  Index:          0          1        2        3        4        5        6
+ *          +-------------+--------+--------+--------+--------+--------+--------+
+ *          | placeholder |   A    |   B    |   C    |   D    |   E    |   F    |
+ *          +-------------+--------+--------+--------+--------+--------+--------+
+ *                 ^           ^                                            ^
+ *              snapshot       |                                            |
+ *               .index        |                                            |
+ *                         firstIndex                                  lastIndex
  *
- * If any method throws StorageException, the Raft instance becomes
- * inoperable. Application must handle recovery.
+ *          |&lt;-- compact --&gt;|&lt;--------------- available entries ----------------&gt;|
+ *             (snapshot)                (returned by entries())
+ * </pre>
+ *
+ * <p>The placeholder at {@code snapshot.index} retains the term for
+ * log matching via {@link #term(long)}. Entries before
+ * {@code firstIndex()} have been compacted into the snapshot and
+ * are no longer available.</p>
+ *
+ * <p>All methods throw {@link StorageException}. Subtypes such as
+ * {@link CompactedException} and {@link EntryUnavailableException}
+ * carry specific diagnostics; the Javadoc on each method lists the
+ * expected subtypes.</p>
+ *
+ * @see InMemoryLogStorage
  */
 public interface LogStorage {
 
     /**
-     * Returns the saved persistent state (term, vote, commit) and
-     * membership configuration from the most recent snapshot.
+     * Returns the persisted hard state and the membership configuration
+     * from the most recent snapshot.
      *
-     * Called once during Raft initialization.
+     * <p>Called once during Raft initialization to restore the node's
+     * term, voted-for, and cluster membership.</p>
+     *
+     * @return the initial state recovered from storage
+     * @throws StorageException if the state cannot be read
      */
     InitialState initialState() throws StorageException;
 
     /**
-     * Returns log entries in the range [lo, hi).
+     * Returns log entries in the half-open range {@code [low, high)}.
      *
-     * @param low       start index (inclusive)
-     * @param high      end index (exclusive)
-     * @param maxSize   maximum total size in bytes (returns at least one entry if any)
-     * @return          list of entries (caller owns this list)
+     * <p>The total serialized size of the returned entries is capped at
+     * {@code maxSize}, but at least one entry is always returned if any
+     * exist in the range.</p>
      *
-     * @throws CompactedException    if lo has been compacted
-     * @throws EntryUnavailableException  if entries in range are unavailable
+     * @param low     start index (inclusive)
+     * @param high    end index (exclusive)
+     * @param maxSize maximum total size in bytes
+     * @return list of entries in the range
+     * @throws CompactedException        if {@code low} has been compacted
+     * @throws EntryUnavailableException if entries in the range are unavailable
+     * @throws StorageException          if the read fails
      */
     List<Entry> entries(long low, long high, long maxSize) throws StorageException;
 
     /**
-     * Returns the term of entry at index i.
+     * Returns the term of the entry at the given index.
      *
-     * Must support range [firstIndex()-1, lastIndex()].
-     * The term at firstIndex()-1 is retained for log matching
-     * even if that entry has been compacted.
+     * <p>Must support the range {@code [firstIndex() - 1, lastIndex()]}.
+     * The term at {@code firstIndex() - 1} is retained for log matching
+     * even after that entry has been compacted.</p>
      *
-     * @throws CompactedException    if index has been compacted
-     * @throws EntryUnavailableException  if index is beyond last entry
+     * @param index the log index to query
+     * @return the term at that index
+     * @throws CompactedException        if the index has been compacted
+     * @throws EntryUnavailableException if the index is beyond the last entry
+     * @throws StorageException          if the read fails
      */
     long term(long index) throws StorageException;
 
     /**
      * Returns the index of the first available log entry.
      *
-     * Entries before this have been compacted into snapshot.
+     * <p>Entries before this index have been compacted into a snapshot.</p>
+     *
+     * @return the first available index
+     * @throws StorageException if the read fails
      */
     long firstIndex() throws StorageException;
 
     /**
      * Returns the index of the last log entry.
+     *
+     * @return the last index in the log
+     * @throws StorageException if the read fails
      */
     long lastIndex() throws StorageException;
 
     /**
      * Returns the most recent snapshot.
      *
-     * @throws SnapshotUnavailableException  if snapshot is temporarily unavailable
-     *         (e.g., being prepared). Raft will retry later.
+     * @return the current snapshot
+     * @throws SnapshotUnavailableException if the snapshot is temporarily
+     *         unavailable (e.g., still being prepared) - the protocol will retry
+     * @throws StorageException if the read fails
      */
     Snapshot snapshot() throws StorageException;
 }

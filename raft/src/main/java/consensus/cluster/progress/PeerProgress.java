@@ -5,90 +5,88 @@ import consensus.config.PeerInflightConfig;
 
 /**
  * Tracks replication progress from leader to a single follower.
- * 
- * The leader maintains one PeerProgress instance per peer (including itself)
- * to track how far each follower's log has been replicated and to decide what
- * entries to send next.
- * 
+ *
+ * <p>The leader maintains one {@code PeerProgress} instance per peer
+ * (including itself) to track how far each follower's log has been
+ * replicated and to decide what entries to send next.</p>
+ *
  * <pre>
- * ┌─────────────────────────────────────────────────────────────────────────────────┐
- * │                    PeerProgress: Leader's View of a Follower                    │
- * ├─────────────────────────────────────────────────────────────────────────────────┤
- * │                                                                                 │
- * │  Leader's Log:  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]                         │
- * │                              ↑     ↑         ↑                                  │
- * │                           match  sentCommit  next                               │
- * │                            =5       =7       =10                                │
- * │                                                                                 │
- * │  Ranges:                                                                        │
- * │  ─────────────────────────────────────────────────────────────────────────────  │
- * │  [1, match]         = Confirmed replicated (follower acknowledged)              │
- * │  (match, next)      = In-flight (sent, awaiting acknowledgment)                 │
- * │  [next, lastIndex]  = Not yet sent                                              │
- * │                                                                                 │
- * │  sentCommit         = Highest commit index we've told follower about            │
- * │                       (avoids redundant commit updates)                         │
- * │                                                                                 │
- * │  Invariants:                                                                    │
- * │  ─────────────────────────────────────────────────────────────────────────────  │
- * │  • match < next                    (always, next is at least match + 1)         │
- * │  • sentCommit <= next - 1          (can't commit what we haven't sent)          │
- * │  • next >= 1                       (next is always at least 1)                  │
- * │                                                                                 │
- * └─────────────────────────────────────────────────────────────────────────────────┘
- * 
- * ┌─────────────────────────────────────────────────────────────────────────────────┐
- * │                              State Transitions                                  │
- * ├─────────────────────────────────────────────────────────────────────────────────┤
- * │                                                                                 │
- * │       ┌─────────┐  found match   ┌───────────┐  rejection   ┌─────────┐         │
- * │       │  PROBE  │ ─────────────► │ REPLICATE │ ───────────► │  PROBE  │         │
- * │       └─────────┘                └───────────┘              └─────────┘         │
- * │            │                          │                                         │
- * │            │ needs snapshot           │ needs snapshot                          │
- * │            ▼                          ▼                                         │
- * │       ┌──────────────────────────────────────┐                                  │
- * │       │              SNAPSHOT                │                                  │
- * │       │  (waiting for snapshot to complete)  │ ──── done ────► PROBE            │
- * │       └──────────────────────────────────────┘                                  │
- * │                                                                                 │
- * │  PROBE:     Finding match point. Send one entry, wait for response.             │
- * │  REPLICATE: Fast path. Send many entries optimistically.                        │
- * │  SNAPSHOT:  Follower too far behind. Send snapshot, pause entries.              │
- * │                                                                                 │
- * └─────────────────────────────────────────────────────────────────────────────────┘
+ * +-------------------------------------------------------------------+
+ * |            PeerProgress: Leader's View of a Follower              |
+ * +-------------------------------------------------------------------+
+ * |                                                                   |
+ * |  Leader's Log:  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]           |
+ * |                              ^     ^         ^                    |
+ * |                           match  sentCommit  next                 |
+ * |                            =5       =7       =10                  |
+ * |                                                                   |
+ * |  Ranges:                                                          |
+ * |  ---------------------------------------------------------        |
+ * |  [1, match]         = confirmed replicated (acknowledged)         |
+ * |  (match, next)      = in-flight (sent, awaiting ack)              |
+ * |  [next, lastIndex]  = not yet sent                                |
+ * |                                                                   |
+ * |  sentCommit         = highest commit index told to follower       |
+ * |                       (avoids redundant commit updates)           |
+ * |                                                                   |
+ * |  Invariants:                                                      |
+ * |  ---------------------------------------------------------        |
+ * |  match  &lt; next             (next is at least match + 1)        |
+ * |  sentCommit &lt;= next - 1   (can't commit unsent entries)        |
+ * |  next &gt;= 1                                                     |
+ * |                                                                   |
+ * +-------------------------------------------------------------------+
+ *
+ * +-------------------------------------------------------------------+
+ * |                      State Transitions                            |
+ * +-------------------------------------------------------------------+
+ * |                                                                   |
+ * |  +-------+  found match  +-----------+  rejection  +-------+      |
+ * |  | PROBE | -----------> | REPLICATE | ----------> | PROBE |       |
+ * |  +-------+              +-----------+             +-------+       |
+ * |      |                       |                                    |
+ * |      | needs snapshot        | needs snapshot                     |
+ * |      v                       v                                    |
+ * |  +------------------------------------+                           |
+ * |  |             SNAPSHOT               |                           |
+ * |  | (waiting for snapshot to complete) |--- done ---> PROBE        |
+ * |  +------------------------------------+                           |
+ * |                                                                   |
+ * +-------------------------------------------------------------------+
  * </pre>
- * 
+ *
  * @see ReplicationState
  * @see Inflight
  */
 public class PeerProgress {
     
     /**
-     * Match is the index up to which the follower's log is known to match the
-     * leader's. The leader is certain the follower has entries [1, match].
-     * Updated when we receive a successful AppendEntriesResponse.
+     * The index up to which the follower's log is known to match the leader's.
+     *
+     * <p>The leader is certain the follower has entries [1, match].
+     * Updated when we receive a successful AppendEntriesResponse.</p>
      */
     private long match;
-    
+
     /**
-     * Next is the log index of the next entry to send to this follower.
-     * Entries in the (match, next) interval are already in flight.
+     * The log index of the next entry to send to this follower.
      *
-     * Invariant: 0 <= match < next
-     * Note: It follows that next >= 1
+     * <p>Entries in the (match, next) interval are already in flight.</p>
+     *
+     * <p>Invariant: {@code 0 <= match < next} (it follows that {@code next >= 1}).</p>
      */
     private long next;
-    
+
     /**
-     * sentCommit is the highest commit index in flight to the follower.
-     * Used to avoid sending redundant commit updates in heartbeats.
+     * The highest commit index in flight to the follower.
      *
-     * Generally monotonic, but can regress when converting to Probe state
-     * or when receiving a rejection (the sent commit may no longer be valid).
+     * <p>Used to avoid sending redundant commit updates in heartbeats.</p>
      *
-     * Note: sentCommit can be > match when commit is sent with in-flight entries.
-     * Invariant: sentCommit <= next - 1
+     * <p>Generally monotonic, but can regress when converting to Probe state
+     * or when receiving a rejection (the sent commit may no longer be valid).</p>
+     *
+     * <p>Note: sentCommit can be &gt; match when commit is sent with in-flight
+     * entries. Invariant: {@code sentCommit <= next - 1}.</p>
      */
     private long sentCommit;
     
@@ -96,16 +94,18 @@ public class PeerProgress {
     private ReplicationState state;
 
     /**
-     * Role of this peer in the cluster: VOTER or LEARNER.
-     * Learners receive log entries but don't participate in elections.
+     * Membership type of this peer: {@link MemberType#VOTER} or {@link MemberType#LEARNER}.
+     *
+     * <p>Learners receive log entries but don't participate in elections.</p>
      */
     private MemberType memberType;
-    
+
     /**
-     * Active is true if the progress is recently active. Receiving any
-     * message from the corresponding follower indicates the progress is active.
-     * Can be reset to false after an election timeout.
-     * Used for liveness detection and leader transfer decisions.
+     * Whether this peer has responded recently.
+     *
+     * <p>Receiving any message from the corresponding follower indicates the
+     * progress is active. Reset to {@code false} after an election timeout.
+     * Used for liveness detection and leader transfer decisions.</p>
      */
     private boolean active;
     
@@ -113,14 +113,25 @@ public class PeerProgress {
     private final PeerInflightConfig inflightConfig;
     
     /**
-     * Creates a new PeerProgress.
+     * Creates a new {@code PeerProgress} with match index 0.
      *
      * @param inflightConfig configuration for flow control (max messages, max bytes)
+     * @param memberType     membership type of this peer ({@link MemberType#VOTER} or {@link MemberType#LEARNER})
      */
     public PeerProgress(PeerInflightConfig inflightConfig, MemberType memberType) {
         this(inflightConfig, memberType, 0);
     }
 
+    /**
+     * Creates a new {@code PeerProgress} with a given match index.
+     *
+     * <p>Starts in {@link ReplicationState.Probe Probe} state with
+     * {@code next = matchIndex + 1} and {@code sentCommit = 0}.</p>
+     *
+     * @param inflightConfig configuration for flow control (max messages, max bytes)
+     * @param memberType     membership type of this peer ({@link MemberType#VOTER} or {@link MemberType#LEARNER})
+     * @param matchIndex     the highest log index known to be replicated
+     */
     public PeerProgress(PeerInflightConfig inflightConfig, MemberType memberType, long matchIndex) {
         this.inflightConfig = inflightConfig;
         this.memberType = memberType;
@@ -132,58 +143,107 @@ public class PeerProgress {
     }
 
     /* ==================== GETTERS ==================== */
-    
-    /** Returns the highest confirmed replicated index. */
+
+    /**
+     * Returns the highest confirmed replicated index.
+     *
+     * @return the match index
+     */
     public long match() { return match; }
-    
-    /** Returns the next index to send. */
+
+    /**
+     * Returns the next log index to send to this follower.
+     *
+     * @return the next index
+     */
     public long next() { return next; }
 
-    /** Returns replication state of this peer */
+    /**
+     * Returns the current replication state of this peer.
+     *
+     * @return the replication state, never {@code null}
+     */
     public ReplicationState state() { return state; }
-    
-    /** Returns the last commit index sent to follower. */
+
+    /**
+     * Returns the highest commit index already sent to this follower.
+     *
+     * @return the sent commit index
+     */
     public long sentCommit() { return sentCommit; }
-    
-    /** Returns whether follower has responded recently. */
+
+    /**
+     * Returns whether this follower has responded recently.
+     *
+     * @return {@code true} if active
+     */
     public boolean isActive() { return active; }
-    
-    /** Sets the active status. */
+
+    /**
+     * Sets the active status of this peer.
+     *
+     * @param active {@code true} to mark as active, {@code false} to mark inactive
+     */
     public void setActive(boolean active) { this.active = active; }
-    
-    /** Returns true if this peer is a learner (non-voting member). */
+
+    /**
+     * Returns {@code true} if this peer is a learner (non-voting member).
+     *
+     * @return {@code true} if learner
+     */
     public boolean isLearner() { return memberType == MemberType.LEARNER; }
 
-    /** Returns true if this peer is a learner (non-voting member). */
+    /**
+     * Returns {@code true} if this peer is a voter.
+     *
+     * @return {@code true} if voter
+     */
     public boolean isVoter() { return memberType == MemberType.VOTER; }
-    
-    /** Marks this peer as a learner. */
+
+    /**
+     * Demotes this peer to learner. The peer will no longer count
+     * toward commit or election quorums.
+     */
     public void becomeLearner() { memberType = MemberType.LEARNER; }
 
-
-    public void becomeVoter() {
-        memberType = MemberType.VOTER;
-    }
-
-
+    /**
+     * Promotes this peer to voter. The peer will now count
+     * toward commit and election quorums.
+     */
+    public void becomeVoter() { memberType = MemberType.VOTER; }
 
     /**
      * Returns whether sending log entries to this follower is paused.
-     * This happens when:
-     * - In Probe and waiting for response (ProbePaused)
-     * - In Replicate and inflights are full (ReplicatePaused)
-     * - In Snapshot (always paused)
      *
-     * @return true if sending is paused
+     * <p>Sending is paused when:</p>
+     * <ul>
+     *   <li>In Probe and waiting for response (ProbePaused)</li>
+     *   <li>In Replicate and inflights are full (ReplicatePaused)</li>
+     *   <li>In Snapshot (always paused)</li>
+     * </ul>
+     *
+     * @return {@code true} if sending is paused
      */
     public boolean isPaused() {
         return state.isPaused();
     }
 
+    /**
+     * Returns {@code true} if the peer is in a probing state
+     * ({@link ReplicationState.Probe} or {@link ReplicationState.ProbePaused}).
+     *
+     * @return {@code true} if probing
+     */
     public boolean probing() {
         return state instanceof ReplicationState.Probe || state instanceof ReplicationState.ProbePaused;
     }
 
+    /**
+     * Returns {@code true} if the peer is in a replicating state
+     * ({@link ReplicationState.Replicate} or {@link ReplicationState.ReplicatePaused}).
+     *
+     * @return {@code true} if replicating
+     */
     public boolean replicating() {
         return state instanceof ReplicationState.Replicate || state instanceof ReplicationState.ReplicatePaused;
     }
@@ -191,13 +251,18 @@ public class PeerProgress {
     /* ==================== STATE TRANSITIONS ==================== */
 
     /**
-     * Transitions into Probe state. Next is reset to match+1 or,
-     * if coming from Snapshot state and larger, the snapshot index + 1.
+     * Transitions into Probe state.
      *
-     * Called when:
-     * - Rejection received (logs diverged, need to find new match point)
-     * - Snapshot completed (resume with probing)
+     * <p>Next is reset to {@code match + 1} or, if coming from Snapshot state
+     * and larger, {@code snapshotIndex + 1}.</p>
      *
+     * <p>Called when:</p>
+     * <ul>
+     *   <li>Rejection received (logs diverged, need to find new match point)</li>
+     *   <li>Snapshot completed (resume with probing)</li>
+     * </ul>
+     *
+     * <pre>
      * Example (from Replicate):
      *   Before: match=5, next=10, sentCommit=8
      *   After:  match=5, next=6,  sentCommit=5
@@ -205,6 +270,7 @@ public class PeerProgress {
      * Example (from Snapshot with index=20):
      *   Before: match=5, next=21
      *   After:  match=5, next=21 (max of 21 and 6)
+     * </pre>
      */
     public void becomeProbe() {
         if (state instanceof  ReplicationState.Snapshot(long snapshotIndex)) {
@@ -225,15 +291,17 @@ public class PeerProgress {
     }
 
     /**
-     * Transitions into Replicate state, resetting next to match+1.
-     * Creates a new Inflight tracker for flow control.
+     * Transitions into Replicate state, resetting next to {@code match + 1}.
      *
-     * Called when match point is found and we're ready for fast replication.
-     * Cannot transition directly from Snapshot (must go through Probe first).
+     * <p>Creates a new {@link Inflight} tracker for flow control. Called when
+     * match point is found and we're ready for fast replication. Cannot
+     * transition directly from Snapshot (must go through Probe first).</p>
      *
+     * <pre>
      * Example:
      *   Before: match=10, next=11, state=Probe
      *   After:  match=10, next=11, state=Replicate(new Inflight)
+     * </pre>
      *
      * @throws IllegalStateException if called from Snapshot state
      */
@@ -252,12 +320,15 @@ public class PeerProgress {
     /**
      * Moves the progress to Snapshot state with the specified snapshot index.
      *
-     * Called when follower needs entries that have been compacted from leader's log.
-     * While in Snapshot state, replication is paused until snapshot completes.
+     * <p>Called when follower needs entries that have been compacted from the
+     * leader's log. While in Snapshot state, replication is paused until the
+     * snapshot completes.</p>
      *
+     * <pre>
      * Example (snapshotIndex=100):
      *   Before: match=5,   next=10,  sentCommit=8
      *   After:  match=5,   next=101, sentCommit=100
+     * </pre>
      *
      * @param snapshotIndex the index of the snapshot being sent
      * @throws IllegalStateException if already in Snapshot state
@@ -280,7 +351,7 @@ public class PeerProgress {
      *
      * <p>Unlike {@link #becomeProbe()} called from Snapshot state (which
      * probes from {@code snapshotIndex + 1} because the snapshot was applied),
-     * this method probes from {@code match + 1} — the snapshot was never
+     * this method probes from {@code match + 1} - the snapshot was never
      * applied, so we go back to the last confirmed match point.</p>
      *
      * <p>Example (snapshot at index 100, match at 5):</p>
@@ -310,11 +381,14 @@ public class PeerProgress {
      * Updates progress after sending AppendEntries with the given
      * number of entries and total byte size.
      *
-     * In Replicate state: optimistically advances next and tracks in inflights.
-     * In Probe state: pauses after sending (wait for response).
+     * <ul>
+     *   <li><b>Replicate</b> - optimistically advances next and tracks in inflights.</li>
+     *   <li><b>Probe</b> - pauses after sending (wait for response).</li>
+     * </ul>
      *
-     * Must be called with Probe or Replicate state (not Snapshot).
+     * <p>Must be called with Probe or Replicate state (not Snapshot).</p>
      *
+     * <pre>
      * Example (Replicate, sending 3 entries of 150 bytes):
      *   Before: match=5, next=6
      *   After:  match=5, next=9, inflights=[(8, 150)]
@@ -322,6 +396,7 @@ public class PeerProgress {
      * Example (Probe, sending 1 entry):
      *   Before: state=Probe
      *   After:  state=ProbePaused
+     * </pre>
      *
      * @param entries number of entries sent in the message
      * @param bytes   total byte size of entries sent
@@ -343,21 +418,26 @@ public class PeerProgress {
     }
 
     /**
-     * Returns true if sending the given commit index can potentially
+     * Returns {@code true} if sending the given commit index can potentially
      * advance the follower's commit index.
      *
-     * Returns true only if:
-     * - The commit is higher than what we've sent (index > sentCommit)
-     * - We haven't already sent a commit covering all sent entries (sentCommit < next - 1)
+     * <p>Returns {@code true} only if:</p>
+     * <ul>
+     *   <li>The commit is higher than what we've sent ({@code index > sentCommit})</li>
+     *   <li>We haven't already sent a commit covering all sent entries
+     *       ({@code sentCommit < next - 1})</li>
+     * </ul>
      *
+     * <pre>
      * Example:
      *   sentCommit=5, next=10
-     *   canAdvanceCommit(7)  → true  (7 > 5 and 5 < 9)
-     *   canAdvanceCommit(5)  → false (5 > 5 is false)
-     *   canAdvanceCommit(12) → true  (12 > 5 and 5 < 9)
+     *   canAdvanceCommit(7)  -> true  (7 &gt; 5 and 5 &lt; 9)
+     *   canAdvanceCommit(5)  -> false (5 &gt; 5 is false)
+     *   canAdvanceCommit(12) -> true  (12 &gt; 5 and 5 &lt; 9)
+     * </pre>
      *
      * @param index the commit index we want to send
-     * @return true if sending this commit would be useful
+     * @return {@code true} if sending this commit would be useful
      */
     public boolean canAdvanceCommit(long index) {
         return index > sentCommit && sentCommit < (next - 1);
@@ -377,7 +457,9 @@ public class PeerProgress {
 
     /**
      * Resumes sending if currently in a paused state.
-     * ProbePaused -> Probe, ReplicatePaused -> Replicate.
+     *
+     * <p>ProbePaused to Probe, ReplicatePaused to Replicate.
+     * No-op if already resumed or in Snapshot state.</p>
      */
     public void resumeStateIfPaused() {
         state = switch (state) {
@@ -389,11 +471,12 @@ public class PeerProgress {
 
     /**
      * Pauses sending if currently in an active (unpaused) state.
-     * Probe → ProbePaused, Replicate → ReplicatePaused.
-     * Already-paused and Snapshot states are unaffected.
+     *
+     * <p>Probe to ProbePaused, Replicate to ReplicatePaused.
+     * Already-paused and Snapshot states are unaffected.</p>
      *
      * <p>Used after snapshot status handling to prevent the leader from
-     * immediately sending AppendEntries — on success, we wait for the
+     * immediately sending AppendEntries - on success, we wait for the
      * peer's AppendEntriesResponse; on failure, we wait for the next
      * heartbeat cycle before retrying.</p>
      *
@@ -411,20 +494,22 @@ public class PeerProgress {
      * Called when an AppendEntries was accepted. Updates match and frees
      * acknowledged messages from inflights.
      *
-     * Returns false if index doesn't advance match (stale response).
+     * <p>Returns {@code false} if the index doesn't advance match (stale response).</p>
      *
+     * <pre>
      * Example (successful update):
      *   Before: match=5, next=10, inflights=[(6,10), (7,20), (8,30)]
-     *   tryUpdate(7) → true
+     *   tryUpdate(7) -> true
      *   After:  match=7, next=10, inflights=[(8,30)]
      *
      * Example (stale response):
      *   Before: match=5
-     *   tryUpdate(4) → false
+     *   tryUpdate(4) -> false
      *   After:  match=5 (unchanged)
+     * </pre>
      *
      * @param index the index acknowledged by the follower
-     * @return true if match was advanced, false if stale response
+     * @return {@code true} if match was advanced, {@code false} if stale response
      */
     public boolean tryUpdate(long index) {
         if (index <= match) {
@@ -449,28 +534,34 @@ public class PeerProgress {
      * Called when an AppendEntries was rejected. Decrements next to find
      * a matching point.
      *
-     * In Replicate state:
-     * - Only relevant if rejectedIndex > match (otherwise stale)
-     * - Resets next to match+1 and transitions to Probe
+     * <p><b>In Replicate state:</b></p>
+     * <ul>
+     *   <li>Only relevant if {@code rejectedIndex > match} (otherwise stale)</li>
+     *   <li>Resets next to {@code match + 1} and transitions to Probe</li>
+     * </ul>
      *
-     * In Probe state:
-     * - Only relevant if rejectedIndex == next-1 (the exact entry we sent)
-     * - Uses lastMatchedIndex hint from follower to optimize next decrement
-     * - Does not decrement below match+1
+     * <p><b>In Probe state:</b></p>
+     * <ul>
+     *   <li>Only relevant if {@code rejectedIndex == next - 1} (the exact entry we sent)</li>
+     *   <li>Uses {@code matchIndexHint} from follower to optimize next decrement</li>
+     *   <li>Does not decrement below {@code match + 1}</li>
+     * </ul>
      *
+     * <pre>
      * Example (Probe state, follower hints at lastMatchedIndex=3):
      *   Before: match=0, next=10
-     *   tryDecrementTo(9, 3) → true
+     *   tryDecrementTo(9, 3) -> true
      *   After:  match=0, next=4 (min(9, 4) = 4, max(4, 1) = 4)
      *
      * Example (stale rejection):
      *   Before: match=5, next=10
-     *   tryDecrementTo(6, 3) → false (6 != 9)
+     *   tryDecrementTo(6, 3) -> false (6 != 9)
      *   After:  unchanged
+     * </pre>
      *
-     * @param rejectedIndex    the index that was rejected by the follower
-     * @param matchIndexHint the hint from follower about its last matched index
-     * @return true if next was decremented, false if stale rejection
+     * @param rejectedIndex  the index that was rejected by the follower
+     * @param matchIndexHint hint from follower about its last matched index
+     * @return {@code true} if next was decremented, {@code false} if stale rejection
      */
     public boolean tryDecrementTo(long rejectedIndex, long matchIndexHint) {
         if (state instanceof ReplicationState.Replicate || state instanceof ReplicationState.ReplicatePaused) {
@@ -493,6 +584,15 @@ public class PeerProgress {
         return true;
     }
 
+    /**
+     * Returns {@code true} if the leader can send more entries to this peer.
+     *
+     * <p>Sending is allowed when in Probe (one message at a time) or
+     * Replicate with available inflight capacity. All other states
+     * (paused or snapshot) return {@code false}.</p>
+     *
+     * @return {@code true} if more messages can be sent
+     */
     public boolean canReplicateMessages() {
         return switch (state) {
             case ReplicationState.Replicate(var inflight)-> !inflight.isFull();

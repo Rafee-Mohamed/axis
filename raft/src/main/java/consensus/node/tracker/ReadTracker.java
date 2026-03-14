@@ -1,5 +1,6 @@
-package consensus.node;
+package consensus.node.tracker;
 
+import consensus.node.StateChangeException;
 import consensus.protocol.read.ReadState;
 import consensus.engine.VolatileState;
 
@@ -15,14 +16,14 @@ import java.util.concurrent.CompletableFuture;
  * <p>A linearizable read goes through three stages inside the Raft
  * core before the application can safely serve it:</p>
  * <ol>
- *   <li><b>Registered</b> -- the read request is submitted; the leader
+ *   <li><b>Registered</b> - the read request is submitted; the leader
  *       records its current commit index and initiates a heartbeat
  *       round to confirm authority.</li>
- *   <li><b>Confirmed</b> -- a heartbeat majority ack proves the leader
+ *   <li><b>Confirmed</b> - a heartbeat majority ack proves the leader
  *       is still authoritative. The read enters
  *       {@code readsAwaitingApply} in the Raft core, waiting for the
  *       local applied index to reach the recorded commit index.</li>
- *   <li><b>Released</b> -- {@code applied >= commitIndex}. The read
+ *   <li><b>Released</b> - {@code applied >= commitIndex}. The read
  *       moves from {@code readsAwaitingApply} to {@code readStates}
  *       and is surfaced in the output. The application can now serve
  *       the read.</li>
@@ -35,42 +36,42 @@ import java.util.concurrent.CompletableFuture;
  *
  * <pre>
  *   ReadTracker                                  Raft Core
- *   ───────────                                  ─────────
+ *   -----------                                  ---------
  *
  *   submit(F1)     submit(F2)     submit(F3)     submit(F4)     submit(F5)
- *     │               │              │              │              │
- *     ▼               ▼              ▼              ▼              ▼
- *   ┌──────────────────────────────────────────────────────────────────┐
- *   │ pending:  [ F3, F4, F5 ]                                         │
- *   │           unconfirmed -- heartbeat ack not yet received          │
- *   │           failed on role change                                  │
- *   └──────────────────────────────────────────────────────────────────┘
- *                 │
- *                 │  heartbeat majority ack (leadership proven)
- *                 │  F1, F2 moved to confirmed in previous reconcile
- *                 ▼
- *   ┌──────────────────────────────────────────────────────────────────┐
- *   │ confirmed: [ (F1, idx=10), (F2, idx=12) ]                        │
- *   │            leadership proven -- guaranteed to complete           │
- *   │            preserved across role changes                         │
- *   └──────────────────────────────────────────────────────────────────┘
- *                 │
- *                 │  readStates arrive (applied >= commitIndex)
- *                 ▼
- *              F1.complete(null)  -- application can serve the read
+ *     |               |              |              |              |
+ *     v               v              v              v              v
+ *   +----------------------------------------------------------------------+
+ *   | pending:  [ F3, F4, F5 ]                                             |
+ *   |           unconfirmed - heartbeat ack not yet received              |
+ *   |           failed on role change                                      |
+ *   +----------------------------------------------------------------------+
+ *                 |
+ *                 |  heartbeat majority ack (leadership proven)
+ *                 |  F1, F2 moved to confirmed in previous reconcile
+ *                 v
+ *   +----------------------------------------------------------------------+
+ *   | confirmed: [ (F1, idx=10), (F2, idx=12) ]                            |
+ *   |            leadership proven - guaranteed to complete               |
+ *   |            preserved across role changes                             |
+ *   +----------------------------------------------------------------------+
+ *                 |
+ *                 |  readStates arrive (applied &gt;= commitIndex)
+ *                 v
+ *              F1.complete(null)  - application can serve the read
  *
  *
  *   Raft Core (parallel state):
  *
  *   readsAwaitingApply: [ RS(10), RS(12) ]     applied = 9
- *                         ↑                    ─────────────
+ *                         ^                    -------------
  *                         next to release      RS(10) released when applied reaches 10
- *                         when applied >= 10   RS(12) released when applied reaches 12
+ *                         when applied &gt;= 10   RS(12) released when applied reaches 12
  *
  *   After applied advances to 10:
  *
  *   readsAwaitingApply: [ RS(12) ]             readStates: [ RS(10) ]
- *                                              ────────────────────────
+ *                                              ------------------------
  *                                              surfaced in output, triggers
  *                                              F1.complete(null) in tracker
  * </pre>
@@ -119,7 +120,7 @@ import java.util.concurrent.CompletableFuture;
  *
  * <h2>Role Change Behavior</h2>
  * <p>On a volatile state change (role transition), only
- * {@code pending} futures are failed -- these reads were never
+ * {@code pending} futures are failed - these reads were never
  * confirmed and may never be. {@code confirmed} futures are
  * preserved because they represent leadership-proven reads that
  * will eventually complete when applied catches up.</p>
@@ -131,7 +132,7 @@ import java.util.concurrent.CompletableFuture;
  * reads automatically would require Raft algorithm-level support:
  * the new leader would need to re-register inherited reads and
  * confirm its own authority via heartbeat majority before serving
- * them. This is not currently implemented -- the retry cost is low
+ * them. This is not currently implemented - the retry cost is low
  * since leader elections are infrequent.</p>
  *
  * <h2>Invariants</h2>
@@ -146,7 +147,7 @@ import java.util.concurrent.CompletableFuture;
  *       last observed {@code readsAwaitingApply.size()}, ensuring
  *       the delta formula produces non-negative results.</li>
  *   <li>{@code newlyConfirmedUnreleasedReads <= readsAwaitingApply.size()}
- *       -- the number of reads to confirm never exceeds items
+ *       - the number of reads to confirm never exceeds items
  *       available at the tail of readsAwaitingApply.</li>
  * </ul>
  *
@@ -155,10 +156,10 @@ import java.util.concurrent.CompletableFuture;
  *   <li>{@code releaseConfirmedReads}: verifies that the commit index
  *       stored in the confirmed future matches the commit index in the
  *       corresponding {@code ReadState}. A mismatch indicates a FIFO
- *       violation -- throws {@code IllegalStateException}.</li>
+ *       violation - throws {@code IllegalStateException}.</li>
  *   <li>{@code confirmReads}: verifies that the count of reads to
  *       confirm does not exceed {@code readsAwaitingApply} size. A
- *       violation indicates a bug in the delta formula -- throws
+ *       violation indicates a bug in the delta formula - throws
  *       {@code IllegalStateException}.</li>
  * </ul>
  */
@@ -166,13 +167,13 @@ public class ReadTracker {
     private record ConfirmedRead(CompletableFuture<Void> future, long commitIndex) {
     }
 
-    // Futures for unconfirmed reads (heartbeat ack not yet received)
+    /** Futures for unconfirmed reads (heartbeat ack not yet received). */
     private final Queue<CompletableFuture<Void>> pending;
 
-    // Futures for confirmed reads, paired with their commit index for safety verification
+    /** Futures for confirmed reads, paired with their commit index for safety verification. */
     private final Queue<ConfirmedRead> confirmed;
 
-    // Size of readsAwaitingApply at the end of the previous reconcile call (for delta computation)
+    /** Size of readsAwaitingApply at the end of the previous reconcile call (for delta computation). */
     private int previousAwaitingApply;
 
     public ReadTracker() {
@@ -186,6 +187,8 @@ public class ReadTracker {
      * Called when the read is accepted by the Raft core (no rejection).
      * The future starts in the pending queue and will move to confirmed
      * once the Raft core proves leadership via heartbeat majority.
+     *
+     * @param future the future to complete when the read is safe to serve
      */
     public void submit(CompletableFuture<Void> future) {
         pending.add(future);
@@ -197,15 +200,15 @@ public class ReadTracker {
      *
      * <p>Executes a four-step pipeline:</p>
      * <ol>
-     *   <li><b>Release confirmed</b> -- complete futures from the
+     *   <li><b>Release confirmed</b> - complete futures from the
      *       confirmed queue that match released readStates.</li>
-     *   <li><b>Release immediate</b> -- complete futures from the
+     *   <li><b>Release immediate</b> - complete futures from the
      *       pending queue for reads that were confirmed and released
      *       within the same step (never entered confirmed queue).</li>
-     *   <li><b>Confirm</b> -- move newly confirmed (but unreleased)
+     *   <li><b>Confirm</b> - move newly confirmed (but unreleased)
      *       futures from pending to confirmed, pairing each with its
      *       commit index from the tail of readsAwaitingApply.</li>
-     *   <li><b>Fail pending on state change</b> -- if a role
+     *   <li><b>Fail pending on state change</b> - if a role
      *       transition occurred, fail all remaining pending futures
      *       (unconfirmed reads that may never complete).</li>
      * </ol>
@@ -240,7 +243,7 @@ public class ReadTracker {
      * Fails all pending (unconfirmed) futures on a role transition.
      *
      * <p>Only pending futures are affected. Confirmed futures are
-     * preserved -- they represent reads proven safe by the previous
+     * preserved - they represent reads proven safe by the previous
      * leader's heartbeat majority and will complete when applied
      * catches up, regardless of the current node's role.</p>
      */
@@ -292,7 +295,7 @@ public class ReadTracker {
      *
      * <p>Iterates {@code readStates} front-to-back, popping from the
      * confirmed queue in lockstep. Stops when the confirmed queue is
-     * empty -- any remaining readStates are immediately released reads
+     * empty - any remaining readStates are immediately released reads
      * that bypassed the confirmed queue entirely.</p>
      *
      * <p>The commit index stored at confirm time is verified against
@@ -346,6 +349,12 @@ public class ReadTracker {
     }
 
 
+    /**
+     * Fails all tracked futures (both pending and confirmed) with the
+     * given cause. Used during node shutdown.
+     *
+     * @param t the failure cause
+     */
     public void failAll(Throwable t) {
         for (var pendingRead: pending) {
             pendingRead.completeExceptionally(t);

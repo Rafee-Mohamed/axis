@@ -2,75 +2,76 @@ package consensus.cluster.progress;
 
 /**
  * Defines the replication state machine for leader-to-follower communication.
- * 
- * A sealed interface with record implementations ensures type-safe state
- * transitions and eliminates invalid states at compile time.
- * 
+ *
+ * <p>A sealed interface with record implementations ensures type-safe state
+ * transitions and eliminates invalid states at compile time.</p>
+ *
  * <pre>
- * ┌──────────────────────────────────────────────────────────┐
- * │               Valid State Transitions                    │
- * ├──────────────────────────────────────────────────────────┤
- * │                                                          │
- * │      ┌─────────── pause() ───────────┐                   │
- * │      │                               ▼                   │
- * │   ┌──────┐                    ┌─────────────┐            │
- * │   │Probe │◄── resume() ────── │ ProbePaused │            │
- * │   └──────┘                    └─────────────┘            │
- * │      │                               │                   │
- * │      │ toReplicate()                 │ toReplicate()     │
- * │      ▼                               ▼                   │
- * │      ┌─────────── pause() ───────────┐                   │
- * │      │                               ▼                   │
- * │   ┌───────────┐              ┌─────────────────┐         │
- * │   │ Replicate │◄─ resume() ──│ ReplicatePaused │         │
- * │   └───────────┘              └─────────────────┘         │
- * │      │                               │                   │
- * │      │ toProbe()                     │ toProbe()         │
- * │      │   (rejection)                 │   (rejection)     │
- * │      └───────────────┬───────────────┘                   │
- * │                      ▼                                   │
- * │                   ┌──────┐                               │
- * │                   │Probe │                               │
- * │                   └──────┘                               │
- * │                      ▲                                   │
- * │                      │ toProbe()                         │
- * │                      │                                   │
- * │                 ┌──────────┐                             │
- * │                 │ Snapshot │◄── toSnapshot(index)        │
- * │                 └──────────┘    (from ANY state except   │
- * │                                  Snapshot itself)        │
- * │                                                          │
- * └──────────────────────────────────────────────────────────┘
+ * +------------------------------------------------------------+
+ * |                  Valid State Transitions                   |
+ * +------------------------------------------------------------+
+ * |                                                            |
+ * |      +----------- pause() -----------+                     |
+ * |      |                               v                     |
+ * |   +-------+                    +-------------+             |
+ * |   | Probe |&lt;--- resume() ---| ProbePaused |             |
+ * |   +-------+                    +-------------+             |
+ * |      |                               |                     |
+ * |      | toReplicate()                 | toReplicate()       |
+ * |      v                               v                     |
+ * |      +----------- pause() -----------+                     |
+ * |      |                               v                     |
+ * |   +-----------+              +-----------------+           |
+ * |   | Replicate |&lt;- resume() -| ReplicatePaused |         |
+ * |   +-----------+              +-----------------+           |
+ * |      |                               |                     |
+ * |      | toProbe()                     | toProbe()           |
+ * |      |   (rejection)                 |   (rejection)       |
+ * |      +---------------+---------------+                     |
+ * |                      v                                     |
+ * |                   +-------+                                |
+ * |                   | Probe |                                |
+ * |                   +-------+                                |
+ * |                      ^                                     |
+ * |                      | toProbe()                           |
+ * |                      |                                     |
+ * |                 +----------+                               |
+ * |                 | Snapshot |&lt;-- toSnapshot(index)       |
+ * |                 +----------+   (from any state except      |
+ * |                                 Snapshot itself)           |
+ * |                                                            |
+ * +------------------------------------------------------------+
  * </pre>
- * 
- * States:
- * - Probe: Finding match point with follower. Send one entry, wait for response.
- * - ProbePaused: Waiting for response before sending more.
- * - Replicate: Fast path. Pipeline many messages. Has Inflight for flow control.
- * - ReplicatePaused: Inflight buffer full. Resume when acknowledgments arrive.
- * - Snapshot: Follower too far behind. Sending snapshot. Always paused.
- * 
- * Invalid transitions (enforced by design - methods don't exist):
- * - Snapshot → Snapshot (no self-transition)
- * - Snapshot → Replicate (must probe first)
- * 
- * Design rationale:
- * - Sealed interface: Only these 5 states exist, enforced at compile time.
- * - Records: Immutable states. Transitions create new instances.
- * - Instance methods for transitions: Ensures only valid transitions compile.
- * - Inflight in Replicate states: Flow control only needed during fast replication.
- * - Index in Snapshot: Tracks pending snapshot for progress reporting.
- * 
+ *
+ * <p><b>States:</b></p>
+ * <ul>
+ *   <li><b>Probe</b> - finding match point with follower. Send one entry, wait for response.</li>
+ *   <li><b>ProbePaused</b> - waiting for response before sending more.</li>
+ *   <li><b>Replicate</b> - fast path. Pipeline many messages. Has {@link Inflight} for flow control.</li>
+ *   <li><b>ReplicatePaused</b> - inflight buffer full. Resume when acknowledgments arrive.</li>
+ *   <li><b>Snapshot</b> - follower too far behind. Sending snapshot. Always paused.</li>
+ * </ul>
+ *
+ * <p><b>Invalid transitions</b> (enforced by design - methods don't exist):</p>
+ * <ul>
+ *   <li>Snapshot to Snapshot (no self-transition)</li>
+ *   <li>Snapshot to Replicate (must probe first)</li>
+ * </ul>
+ *
+ * <p>Transitions are modeled as instance methods on each record, so only
+ * valid state changes compile. Each transition returns a new instance.</p>
+ *
  * @see PeerProgress
  * @see Inflight
  */
 public sealed interface ReplicationState {
 
     /**
-     * Returns true if sending log entries is paused in this state.
-     * Only Probe and Replicate are active sending states.
+     * Returns {@code true} if sending log entries is paused in this state.
      *
-     * @return true if paused (ProbePaused, ReplicatePaused, or Snapshot)
+     * <p>Only {@link Probe} and {@link Replicate} are active sending states.</p>
+     *
+     * @return {@code true} if paused ({@link ProbePaused}, {@link ReplicatePaused}, or {@link Snapshot})
      */
     default boolean isPaused() {
         return !(this instanceof Probe || this instanceof Replicate);
@@ -79,27 +80,32 @@ public sealed interface ReplicationState {
     /* ==================== PROBE STATES ==================== */
 
     /**
-     * Probe state: Finding the match point with the follower.
-     * Sends one entry at a time and waits for response.
-     * Initial state for new peers or after failures.
+     * Probe state: finding the match point with the follower.
+     *
+     * <p>Sends one entry at a time and waits for response.
+     * Initial state for new peers or after failures.</p>
      */
     record Probe() implements ReplicationState {
-        
-        /** Pause after sending an entry. */
-        public ProbePaused pause() { return new ProbePaused(); }
-        
+
         /**
-         * Transition to Replicate when match is found.
+         * Pauses after sending an entry - wait for response before sending more.
          *
-         * @param inflight the flow control tracker
+         * @return new ProbePaused state
+         */
+        public ProbePaused pause() { return new ProbePaused(); }
+
+        /**
+         * Transitions to Replicate when match point is found.
+         *
+         * @param inflight the flow control tracker for pipelining
          * @return new Replicate state
          */
         public Replicate toReplicate(Inflight inflight) {
             return new Replicate(inflight);
         }
-        
+
         /**
-         * Transition to Snapshot when follower needs a snapshot.
+         * Transitions to Snapshot when the follower needs a snapshot.
          *
          * @param pendingSnapshotIndex the index of the snapshot being sent
          * @return new Snapshot state
@@ -110,26 +116,31 @@ public sealed interface ReplicationState {
     }
 
     /**
-     * ProbePaused state: Sent an entry in Probe, waiting for response.
-     * No more entries sent until we hear back.
+     * ProbePaused state: sent an entry in Probe, waiting for response.
+     *
+     * <p>No more entries sent until we hear back.</p>
      */
     record ProbePaused() implements ReplicationState {
-        
-        /** Resume to Probe on receiving response. */
-        public Probe resume() { return new Probe(); }
-        
+
         /**
-         * Transition to Replicate when match is found.
+         * Resumes to Probe on receiving a response from the follower.
          *
-         * @param inflight the flow control tracker
+         * @return new Probe state
+         */
+        public Probe resume() { return new Probe(); }
+
+        /**
+         * Transitions to Replicate when match point is found.
+         *
+         * @param inflight the flow control tracker for pipelining
          * @return new Replicate state
          */
         public Replicate toReplicate(Inflight inflight) {
             return new Replicate(inflight);
         }
-        
+
         /**
-         * Transition to Snapshot when follower needs a snapshot.
+         * Transitions to Snapshot when the follower needs a snapshot.
          *
          * @param pendingSnapshotIndex the index of the snapshot being sent
          * @return new Snapshot state
@@ -142,22 +153,31 @@ public sealed interface ReplicationState {
     /* ==================== REPLICATE STATES ==================== */
 
     /**
-     * Replicate state: Fast path for replication.
-     * Pipelines multiple messages optimistically.
-     * Contains an Inflight tracker for flow control.
+     * Replicate state: fast path for replication.
+     *
+     * <p>Pipelines multiple messages optimistically.
+     * Contains an {@link Inflight} tracker for flow control.</p>
      *
      * @param inflight the flow control tracker for this follower
      */
     record Replicate(Inflight inflight) implements ReplicationState {
-        
-        /** Pause when inflight is full. */
-        public ReplicatePaused pause() { return new ReplicatePaused(inflight); }
-        
-        /** Transition to Probe on rejection (logs diverged). */
-        public Probe toProbe() { return new Probe(); }
-        
+
         /**
-         * Transition to Snapshot when follower needs a snapshot.
+         * Pauses when the inflight buffer is full.
+         *
+         * @return new ReplicatePaused state sharing the same inflight tracker
+         */
+        public ReplicatePaused pause() { return new ReplicatePaused(inflight); }
+
+        /**
+         * Transitions back to Probe on rejection (logs diverged).
+         *
+         * @return new Probe state
+         */
+        public Probe toProbe() { return new Probe(); }
+
+        /**
+         * Transitions to Snapshot when the follower needs a snapshot.
          *
          * @param pendingSnapshotIndex the index of the snapshot being sent
          * @return new Snapshot state
@@ -168,22 +188,31 @@ public sealed interface ReplicationState {
     }
 
     /**
-     * ReplicatePaused state: Inflight buffer is full.
-     * Waiting for acknowledgments before sending more.
-     * Still contains Inflight to track pending messages.
+     * ReplicatePaused state: inflight buffer is full.
      *
-     * @param inflight the flow control tracker (shared with Replicate)
+     * <p>Waiting for acknowledgments before sending more.
+     * Still contains {@link Inflight} to track pending messages.</p>
+     *
+     * @param inflight the flow control tracker (shared with {@link Replicate})
      */
     record ReplicatePaused(Inflight inflight) implements ReplicationState {
-        
-        /** Resume to Replicate when space is freed. */
-        public Replicate resume() { return new Replicate(inflight); }
-        
-        /** Transition to Probe on rejection. */
-        public Probe toProbe() { return new Probe(); }
-        
+
         /**
-         * Transition to Snapshot when follower needs a snapshot.
+         * Resumes to Replicate when inflight space is freed by acknowledgments.
+         *
+         * @return new Replicate state sharing the same inflight tracker
+         */
+        public Replicate resume() { return new Replicate(inflight); }
+
+        /**
+         * Transitions back to Probe on rejection (logs diverged).
+         *
+         * @return new Probe state
+         */
+        public Probe toProbe() { return new Probe(); }
+
+        /**
+         * Transitions to Snapshot when the follower needs a snapshot.
          *
          * @param pendingSnapshotIndex the index of the snapshot being sent
          * @return new Snapshot state
@@ -196,17 +225,21 @@ public sealed interface ReplicationState {
     /* ==================== SNAPSHOT STATE ==================== */
 
     /**
-     * Snapshot state: Follower is too far behind.
-     * Sending a snapshot to bring it up to speed.
-     * Always paused (no log entries sent during snapshot).
+     * Snapshot state: follower is too far behind.
+     *
+     * <p>Sending a snapshot to bring it up to speed.
+     * Always paused (no log entries sent during snapshot).</p>
      *
      * @param index the index of the snapshot being sent (for progress tracking)
      */
     record Snapshot(long index) implements ReplicationState {
-        
-        /** Transition to Probe after snapshot completes. */
+
+        /**
+         * Transitions to Probe after the snapshot delivery completes.
+         *
+         * @return new Probe state
+         */
         public Probe toProbe() { return new Probe(); }
-        
-        /* Note: No toSnapshot - cannot transition from Snapshot to Snapshot. */
+
     }
 }

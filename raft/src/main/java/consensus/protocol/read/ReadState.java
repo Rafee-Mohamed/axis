@@ -5,9 +5,9 @@ package consensus.protocol.read;
  *
  * <p>A {@code ReadState} is only surfaced once two conditions are met
  * internally: (1) the leader confirmed its authority via heartbeat
- * majority ack, and (2) the local state machine has applied up to at
+ * quorum ack, and (2) the local state machine has applied up to at
  * least the committed index recorded at read registration time. The
- * application can serve the read immediately upon receiving this —
+ * application can serve the read immediately upon receiving this -
  * no further waiting is required.</p>
  *
  * @param index the committed index at which the read was registered

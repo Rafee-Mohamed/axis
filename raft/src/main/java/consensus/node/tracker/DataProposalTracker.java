@@ -1,7 +1,8 @@
-package consensus.node;
+package consensus.node.tracker;
 
 import consensus.engine.RaftInput;
 import consensus.engine.VolatileState;
+import consensus.node.StateChangeException;
 import consensus.storage.Entry;
 
 import java.util.*;
@@ -15,18 +16,18 @@ import java.util.concurrent.CompletableFuture;
  * <p>A data proposal goes through four stages before the client
  * can consider it durable and retrieve results:</p>
  * <ol>
- *   <li><b>Proposed</b> -- the entry is submitted via
+ *   <li><b>Proposed</b> - the entry is submitted via
  *       {@code node.propose(command)}. On a leader, Raft appends it
  *       to the log. On a follower, Raft forwards it to the leader.</li>
- *   <li><b>Committed</b> -- the entry is replicated to a majority.
+ *   <li><b>Committed</b> - the entry is replicated to a majority.
  *       It cannot be lost or overwritten. The entry appears in
  *       {@code committedEntriesToApply} or
  *       {@code committedEntriesAwaitingApply} in the Raft output.</li>
- *   <li><b>Applied</b> -- the application processes the entry
+ *   <li><b>Applied</b> - the application processes the entry
  *       through its state machine, producing a result. The
  *       application stores the result (e.g., in a result map)
  *       and calls {@code applyTask.complete()}.</li>
- *   <li><b>Released</b> -- the {@code ApplyResponse} event fires
+ *   <li><b>Released</b> - the {@code ApplyResponse} event fires
  *       back into the event loop, advancing Raft's applied index.
  *       The tracker completes the future. The client unblocks and
  *       retrieves the result from the application's result map.</li>
@@ -42,7 +43,7 @@ import java.util.concurrent.CompletableFuture;
  *       from other nodes (forwarded proposals, remote proposals).
  *       A count-based approach cannot distinguish local entries
  *       from remote ones.</li>
- *   <li>IDs are intrinsic to the data -- they survive serialization,
+ *   <li>IDs are intrinsic to the data - they survive serialization,
  *       replication, and leader changes. An entry's ID is the same
  *       on every node, regardless of how it arrived.</li>
  * </ul>
@@ -56,12 +57,12 @@ import java.util.concurrent.CompletableFuture;
  * <p><b>Future lifecycle (state transitions):</b></p>
  * <pre>
  *                submit(id, F)           entry committed           ApplyResponse
- *                                        ID matched in             applied >= entry.index
+ *                                        ID matched in             applied &gt;= entry.index
  *                                        committed entries
- *   not tracked ─────────────► pending ─────────────────► confirmed ─────────────► F.complete(null)
- *                                │                           │
- *                                │ state change              │ state change
- *                                ▼                           ▼
+ *   not tracked -------------> pending -----------------> confirmed -------------> F.complete(null)
+ *                                |                           |
+ *                                | state change              | state change
+ *                                v                           v
  *                       F.completeExceptionally()      preserved (no-op)
  * </pre>
  *
@@ -69,21 +70,21 @@ import java.util.concurrent.CompletableFuture;
  * <pre>
  *   Raft Log:
  *
- *   ──┬───────┬────────────────┬─────────────────────┬────────────────────────
+ *   --+-------+----------------+---------------------+------------------------
  *     applied              applying               committed
  *        3                    6                      10
  *
- *              ├──────────────┤ ├─────────────────────┤
- *              committedEntries committedEntries
- *              ToApply          AwaitingApply
- *              [4, 5, 6]        [7, 8, 9, 10]
- *              (bounded)        (unbounded, for tracking)
- *                    │                │
- *                    └───────┬────────┘
- *                            ▼
+ *              |--------------|  |---------------------|
+ *              committedEntries  committedEntries
+ *              ToApply           AwaitingApply
+ *              [4, 5, 6]         [7, 8, 9, 10]
+ *              (bounded)         (unbounded, for tracking)
+ *                    |                |
+ *                    +-------+--------+
+ *                            v
  *                  confirmNewlyCommitted()
  *                  scan entries, match ID against pending
- *                  if matched: pending.remove(id) --> confirmed.add(index, future)
+ *                  if matched: pending.remove(id) --&gt; confirmed.add(index, future)
  * </pre>
  *
  * <p><b>Release on apply:</b></p>
@@ -109,8 +110,8 @@ import java.util.concurrent.CompletableFuture;
  *   Applying: 6  (entries 4-6 sent to application, bounded by maxApplyingEntriesSize)
  *   Committed: 10
  *
- *   committedEntriesToApply:        [4, 5, 6]       -- bounded, for application to apply
- *   committedEntriesAwaitingApply:  [7, 8, 9, 10]   -- the rest, for tracking only
+ *   committedEntriesToApply:        [4, 5, 6]       - bounded, for application to apply
+ *   committedEntriesAwaitingApply:  [7, 8, 9, 10]   - the rest, for tracking only
  * </pre>
  * <p>Without {@code committedEntriesAwaitingApply}, entries 7-10
  * would remain in {@code pending} even though they are committed
@@ -122,7 +123,7 @@ import java.util.concurrent.CompletableFuture;
  *
  * <h2>Index Optimization</h2>
  * <p>{@code committedEntriesAwaitingApply} is a sliding window
- * that can overlap across advance cycles -- the same entries
+ * that can overlap across advance cycles - the same entries
  * appear until they move into {@code committedEntriesToApply}.
  * To avoid redundant scanning, {@link #confirmNewlyCommitted}
  * uses the tail of the confirmed deque ({@code confirmed.getLast().index()})
@@ -155,9 +156,9 @@ import java.util.concurrent.CompletableFuture;
  *
  * <h2>Role Change Behavior</h2>
  * <p>On a volatile state change (role transition), only
- * {@code pending} futures are failed -- these proposals are not
+ * {@code pending} futures are failed - these proposals are not
  * yet committed and may be lost if the log is truncated by a
- * new leader. {@code confirmed} futures are preserved -- the
+ * new leader. {@code confirmed} futures are preserved - the
  * committed entries will be applied regardless of role changes.</p>
  * <p>Ordering in {@link #reconcile} is critical: confirm runs
  * before failPending. Both can trigger in the same output (entries
@@ -188,10 +189,10 @@ public class DataProposalTracker<T extends TrackablePayload<ID>, ID> {
 
     private record ConfirmedProposal(long index, CompletableFuture<Void> future) {};
 
-    // Futures for uncommitted proposals, keyed by the command's ID
+    /** Futures for uncommitted proposals, keyed by the command's ID. */
     private final Map<ID, CompletableFuture<Void>> pending;
 
-    // Futures for committed proposals awaiting apply, ordered by entry index
+    /** Futures for committed proposals awaiting apply, ordered by entry index. */
     private final Deque<ConfirmedProposal> confirmed;
 
     public DataProposalTracker() {
@@ -217,14 +218,14 @@ public class DataProposalTracker<T extends TrackablePayload<ID>, ID> {
      *
      * <p>Executes a three-step pipeline:</p>
      * <ol>
-     *   <li><b>Confirm from committedEntriesToApply</b> -- scan
+     *   <li><b>Confirm from committedEntriesToApply</b> - scan
      *       entries being sent to the application for apply. Match
      *       IDs against pending, move to confirmed deque.</li>
-     *   <li><b>Confirm from committedEntriesAwaitingApply</b> --
+     *   <li><b>Confirm from committedEntriesAwaitingApply</b> -
      *       scan the committed backlog beyond the apply boundary.
      *       Ensures no committed proposal is left in pending due
      *       to apply backpressure.</li>
-     *   <li><b>Fail pending on state change</b> -- if a role
+     *   <li><b>Fail pending on state change</b> - if a role
      *       transition occurred, fail all remaining pending futures
      *       (uncommitted proposals that may be lost).</li>
      * </ol>
@@ -333,7 +334,7 @@ public class DataProposalTracker<T extends TrackablePayload<ID>, ID> {
      * against the pending map.
      *
      * <p>The cast to {@code T} is safe because all data entries
-     * in the log carry {@link TrackablePayload} instances -- the
+     * in the log carry {@link TrackablePayload} instances - the
      * Node's generic bound enforces this at the propose boundary.
      * Entries from remote nodes carry the same concrete type after
      * deserialization.</p>
@@ -355,7 +356,7 @@ public class DataProposalTracker<T extends TrackablePayload<ID>, ID> {
      * Fails all pending (uncommitted) futures on a role transition.
      *
      * <p>Only pending futures are affected. Confirmed futures are
-     * preserved -- their entries are committed and will be applied
+     * preserved - their entries are committed and will be applied
      * regardless of role changes.</p>
      *
      * @param volatileState present if a role change occurred
@@ -374,6 +375,12 @@ public class DataProposalTracker<T extends TrackablePayload<ID>, ID> {
         pending.clear();
     }
 
+    /**
+     * Fails all tracked futures (both pending and confirmed) with the
+     * given cause. Used during node shutdown.
+     *
+     * @param t the failure cause
+     */
     public void failAll(Throwable t) {
         for (var future: pending.values()) {
             future.completeExceptionally(t);

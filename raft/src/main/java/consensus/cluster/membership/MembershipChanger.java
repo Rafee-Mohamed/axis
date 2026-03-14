@@ -9,38 +9,52 @@ import java.util.*;
  * Pure configuration transformer for membership changes.
  *
  * <p>Computes a new {@link MembershipConfig} from an existing config and a set
- * of changes. Does not touch peer progress — that reconciliation is handled
+ * of changes. Does not touch peer progress - that reconciliation is handled
  * separately by the leader after the new config is produced.</p>
  *
  * <p>Supports two protocols:</p>
  * <ul>
- *   <li><b>Simple</b> — single-phase change. At most one voter may differ
+ *   <li><b>Simple</b> - single-phase change. At most one voter may differ
  *       between the old and new configs (the symmetric difference constraint).
  *       The result is a non-joint config.</li>
- *   <li><b>Joint consensus</b> — two-phase change. First, {@link #executeProtocol}
- *       produces a joint config where both the old (current) and new (incoming)
- *       voter sets coexist. Later, {@link #leaveJoint()} drops the old set and
- *       promotes the new set as the sole config.</li>
+ *   <li><b>Joint consensus</b> - two-phase change. First,
+ *       {@link #executeProtocol} produces a joint config where both old
+ *       (current) and new (incoming) voter sets coexist. Later,
+ *       {@link #leaveJoint()} drops the old set and promotes the new set
+ *       as the sole config.</li>
  * </ul>
  *
  * <p>Protocol selection is driven by the {@link MembershipTransition} on the
  * proposed changes:</p>
  * <ul>
- *   <li>{@code AUTO} — the changer picks simple if the voter symmetric
- *       difference is ≤ 1, otherwise joint.</li>
- *   <li>{@code JOINT_AUTO} / {@code JOINT_EXPLICIT} — always joint.</li>
+ *   <li>{@link MembershipTransition#AUTO} - the changer picks simple if the
+ *       voter symmetric difference is at most 1, otherwise joint.</li>
+ *   <li>{@link MembershipTransition#JOINT_AUTO} /
+ *       {@link MembershipTransition#JOINT_EXPLICIT} - always joint.</li>
  * </ul>
  *
  * <p>This class operates on mutable copies of the config sets, so the original
- * {@link MembershipConfig} is never modified. The resulting config is validated
- * at construction time by {@link MembershipConfig#of}.</p>
+ * {@link MembershipConfig} is never modified.</p>
  */
 public class MembershipChanger {
+
+    /** Mutable copy of the incoming (new) voter set. */
     private final Set<NodeId> incomingVoters;
+
+    /** Mutable copy of the current (outgoing) voter set. */
     private final Set<NodeId> currentVoters;
+
+    /** Mutable copy of the learner set. */
     private final Set<NodeId> learners;
+
+    /** Voters pending demotion to learner after leaving joint consensus. */
     private final Set<NodeId> nextLearners;
 
+    /**
+     * Creates a changer with mutable copies of the given config's sets.
+     *
+     * @param membership the current membership configuration to change from
+     */
     public MembershipChanger(MembershipConfig membership) {
         currentVoters = new HashSet<>(membership.currentVoters());
         incomingVoters = new HashSet<>(membership.incomingVoters());
@@ -51,7 +65,7 @@ public class MembershipChanger {
     /**
      * Applies the given changes and selects the appropriate protocol.
      *
-     * <p>Must only be called when the config is <b>not</b> in joint consensus
+     * <p>Must only be called when the config is not in joint consensus
      * (i.e. {@code incomingVoters} is empty). If the config is already joint,
      * the only valid operation is {@link #leaveJoint()}.</p>
      *
@@ -62,7 +76,7 @@ public class MembershipChanger {
      *       and learner sets.</li>
      *   <li>Select protocol based on transition and symmetric difference.</li>
      *   <li>For simple: promote incomingVoters to currentVoters, clear incoming.</li>
-     *   <li>For joint: keep both sets — the result is a joint config.</li>
+     *   <li>For joint: keep both sets - the result is a joint config.</li>
      * </ol>
      *
      * @param mc the proposed changes and desired transition
@@ -74,9 +88,6 @@ public class MembershipChanger {
         if (!incomingVoters.isEmpty()) {
             throw new IllegalStateException("Membership is in joint consensus, can't start membership protocol while in execution of a protocol - Joint consensus");
         }
-        // Seed the incoming set with the current voters. Changes are applied
-        // to incoming only — current is preserved as the "old" config for
-        // joint consensus, or overwritten by incoming for simple changes.
         incomingVoters.addAll(currentVoters);
         applyChanges(mc);
 
@@ -91,7 +102,10 @@ public class MembershipChanger {
      * Simple protocol: promote the incoming config as the sole config.
      *
      * <p>After this, currentVoters = what was incomingVoters, and
-     * incomingVoters is empty (non-joint). Transition is set to NONE.</p>
+     * incomingVoters is empty (non-joint). Transition is set to
+     * {@link MembershipTransition#NONE}.</p>
+     *
+     * @return the new non-joint membership config
      */
     private MembershipConfig simple() {
         transferMembers();
@@ -101,9 +115,12 @@ public class MembershipChanger {
     /**
      * Joint consensus entry: keep both current and incoming voter sets.
      *
-     * <p>The result is a joint config where quorum requires majority in
-     * <b>both</b> sets. The transition type (AUTO/EXPLICIT) determines
-     * whether the leave-joint phase is triggered automatically or manually.</p>
+     * <p>The result is a joint config where quorum requires a majority in
+     * both sets.</p>
+     *
+     * @param mt the transition type ({@link MembershipTransition#JOINT_AUTO}
+     *           or {@link MembershipTransition#JOINT_EXPLICIT})
+     * @return the new joint membership config
      */
     private MembershipConfig enterJoint(MembershipTransition mt) {
         return buildMembership(mt);
@@ -112,9 +129,10 @@ public class MembershipChanger {
     /**
      * Counts the symmetric difference between current and incoming voter sets.
      *
-     * <p>This is |currentVoters △ incomingVoters| — the number of voters
-     * that are in one set but not the other. For the simple protocol, this
-     * must be ≤ 1 (at most one voter added or removed).</p>
+     * <p>This is the number of voters that are in one set but not the other.
+     * For the simple protocol, this must be at most 1.</p>
+     *
+     * @return the symmetric difference size
      */
     public int votersSymmetricDifference() {
         var diff = new HashSet<>(currentVoters);
@@ -130,6 +148,12 @@ public class MembershipChanger {
 
     }
 
+    /**
+     * Builds a {@link MembershipConfig} from the current mutable state.
+     *
+     * @param mt the transition type for the resulting config
+     * @return a validated membership config
+     */
     private MembershipConfig buildMembership(MembershipTransition mt) {
         return MembershipConfig.of(currentVoters, incomingVoters, learners, nextLearners, mt);
 
@@ -138,15 +162,14 @@ public class MembershipChanger {
     /**
      * Leaves joint consensus: drops the old config, promotes the new one.
      *
-     * <p>Must only be called when the config <b>is</b> in joint consensus
-     * (i.e. {@code incomingVoters} is non-empty). This is the second phase
-     * of a two-phase membership change.</p>
+     * <p>Must only be called when the config is in joint consensus (i.e.
+     * {@code incomingVoters} is non-empty). This is the second phase of a
+     * two-phase membership change.</p>
      *
-     * <p>{@link #transferMembers()} promotes incomingVoters → currentVoters
-     * and moves nextLearners → learners. Nodes that were in the old config
-     * (currentVoters) but not in the new config (incomingVoters) and not in
-     * learners are effectively removed — they won't appear in the result,
-     * and the leader will drop their progress during reconciliation.</p>
+     * <p>{@link #transferMembers()} promotes incomingVoters to currentVoters
+     * and moves nextLearners to learners. Nodes that were in the old config
+     * but not in the new config and not in learners are effectively removed -
+     * the leader will drop their progress during reconciliation.</p>
      *
      * @return the new non-joint membership config
      * @throws IllegalStateException if not in joint consensus
@@ -163,6 +186,7 @@ public class MembershipChanger {
     /**
      * Applies individual changes to the incoming config sets.
      *
+     * @param mc the changes to apply
      * @throws IllegalStateException if all voters would be removed
      */
     private void applyChanges(MembershipChanges mc) {
@@ -180,11 +204,11 @@ public class MembershipChanger {
     }
 
     /**
-     * Promotes incoming → current and nextLearners → learners.
+     * Promotes incoming to current and nextLearners to learners.
      *
-     * <p>Used by both {@link #simple()} (where it finalizes the single-phase
-     * change) and {@link #leaveJoint()} (where it finalizes the second phase
-     * of joint consensus).</p>
+     * <p>Used by both {@link #simple()} (finalizes single-phase change)
+     * and {@link #leaveJoint()} (finalizes the second phase of joint
+     * consensus).</p>
      */
     private void transferMembers() {
         currentVoters.clear();
@@ -197,7 +221,10 @@ public class MembershipChanger {
 
     /**
      * Adds or promotes a node to voter in the incoming config.
-     * If the node was a learner or nextLearner, it is removed from those sets.
+     *
+     * <p>If the node was a learner or nextLearner, it is removed from those sets.</p>
+     *
+     * @param id the node to add as voter
      */
     private void addVoter(NodeId id) {
         incomingVoters.add(id);
@@ -208,14 +235,16 @@ public class MembershipChanger {
     /**
      * Demotes or adds a node as a learner.
      *
-     * <p>If the node is currently a voter in the <b>outgoing</b> config
-     * (currentVoters), it cannot be immediately made a learner — that would
-     * mean tracking it as both voter and learner simultaneously. Instead, it
-     * is placed in {@code nextLearners} and will become a learner when
+     * <p>If the node is currently a voter in the outgoing config
+     * (currentVoters), it cannot be immediately made a learner - that would
+     * mean tracking it as both voter and learner simultaneously. Instead it
+     * is placed in {@code nextLearners} and becomes a learner when
      * {@link #leaveJoint()} is called.</p>
      *
      * <p>If the node is not in the outgoing config, it is added directly
      * to {@code learners}.</p>
+     *
+     * @param id the node to add as learner
      */
     private void addLearner(NodeId id) {
         incomingVoters.remove(id);
@@ -232,18 +261,16 @@ public class MembershipChanger {
     /**
      * Removes a node from the incoming config, learners, and nextLearners.
      *
-     * <p>The node is <b>not</b> removed from currentVoters — during joint
-     * consensus, nodes in the outgoing config must remain until
-     * {@link #leaveJoint()} is called. Nodes only in currentVoters (and not
-     * in the incoming config or learners) will be dropped when the joint
-     * state is left.</p>
+     * <p>The node is not removed from currentVoters - during joint consensus,
+     * nodes in the outgoing config must remain until {@link #leaveJoint()} is
+     * called. Nodes only in currentVoters will be dropped when the joint state
+     * is left.</p>
+     *
+     * @param id the node to remove
      */
     private void remove(NodeId id) {
         incomingVoters.remove(id);
         learners.remove(id);
         nextLearners.remove(id);
     }
-
-
-
 }

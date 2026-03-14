@@ -13,9 +13,18 @@ package consensus.protocol.role;
  * {@link #isTimedOut(int)}.</p>
  */
 public final class TickTimer {
+
+    /** Number of ticks elapsed since the last reset. */
     private int elapsed;
+
+    /** The primary timeout threshold (set at construction). */
     private final int timeout;
 
+    /**
+     * Creates a timer with the given primary timeout.
+     *
+     * @param timeout tick count at which the timer fires
+     */
     public TickTimer(int timeout) {
         this.elapsed = 0;
         this.timeout = timeout;
@@ -38,7 +47,7 @@ public final class TickTimer {
     }
 
     /**
-     * Tick-check-reset in one call — the standard periodic timer pattern.
+     * Tick-check-reset in one call - the standard periodic timer pattern.
      *
      * <p>Increments the counter, checks against the primary timeout, and
      * resets if fired. Returns {@code true} exactly once per cycle when
@@ -57,6 +66,8 @@ public final class TickTimer {
 
     /**
      * Checks whether the counter has reached the primary timeout.
+     *
+     * @return {@code true} if elapsed ticks {@code >=} the primary timeout
      */
     public boolean isTimedOut() {
         return elapsed >= timeout;
@@ -68,6 +79,7 @@ public final class TickTimer {
      * thresholds.
      *
      * @param threshold the tick count to check against
+     * @return {@code true} if elapsed ticks {@code >=} {@code threshold}
      */
     public boolean isTimedOut(int threshold) {
         return elapsed >= threshold;
