@@ -3,58 +3,60 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.zip.CRC32;
 
 public class SegmentManager {
-    private final List<Segment> segments;
+    private final List<SealedSegment> segments;
+    private WritableSegment active;
     private final SegmentConfig config;
-    private final byte[] segmentHeader;
+    private final ByteBuffer segmentHeader;
 
-    private SegmentManager(List<Segment> segments, SegmentConfig config, byte[] segmentHeader) {
+    SegmentManager(List<SealedSegment> segments, WritableSegment active, SegmentConfig config, ByteBuffer segmentHeader) {
         this.segments = segments;
+        this.active = active;
         this.config = config;
         this.segmentHeader = segmentHeader;
     }
 
-    public static SegmentManager open(SegmentConfig config, byte[] segmentHeader) throws IOException {
-        var segments = new ArrayList<Segment>();
-        try (var filePaths = Files.newDirectoryStream(config.directory())) {
-            for (var path: filePaths) {
-                segments.add(Segment.open(path, config, new CRC32()));
-            }
-        }
-        return new SegmentManager(segments, config, segmentHeader);
+    private static Path segmentPath(Path path, int segment, long index) {
+        return path.resolve(segment + "-" + index);
     }
 
-    private void rotate() throws IOException {
-        var active = active();
-        active.close();
+    private void rotate(long index) throws IOException {
+        var finalCrc = active.encoder().crc();
+        var sealed = active.seal();
         var crc = new CRC32();
-        crc.update(active.encoder().crc());
-        var path = segments.size() + " " + 0;
-        var nextSegment = Segment.create(config.directory().resolve(path), config, segmentHeader, crc);
-        segments.add(nextSegment);
+        ByteBuffer buf = ByteBuffer.allocate(Integer.BYTES);
+        buf.putInt(finalCrc);
+        buf.flip();
+        crc.update(buf);
+
+        segments.add(sealed);
+        active = WritableSegment.create(segments.size(), index, config, segmentHeader, crc);
     }
 
-    private Segment active() {
-        return segments.getLast();
+    private long index(ByteBuffer payload) {
+        return config.indexer().index(segments.size(), payload);
     }
+
 
     public void append(List<ByteBuffer> payload) throws IOException {
-        var unappended = active().append(payload);
+        var unappended = active.append(payload);
         if (unappended.isEmpty()) {
             return;
         }
-        rotate();
-        active().append(payload);
+        rotate(index(unappended.getFirst()));
+        active.append(unappended);
     }
 
     public void append(ByteBuffer payload) throws IOException {
-        if (active().append(payload)) {
+        if (active.append(payload)) {
             return;
         }
-        rotate();
-        active().append(payload);
+        rotate(index(payload));
+        active.append(payload);
     }
 }

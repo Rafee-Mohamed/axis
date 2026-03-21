@@ -1,0 +1,129 @@
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.zip.CRC32;
+
+public class Recovery {
+    private SegmentView current;
+    private final Iterator<Path> segments;
+    private final List<Path> paths;
+    private final ByteBuffer segmentHeader;
+    private final WalConfig config;
+
+    private Recovery(List<Path> paths, WalConfig config, ByteBuffer segmentHeader) {
+        this.segments = paths.iterator();
+        this.paths = paths;
+        this.segmentHeader = segmentHeader;
+        this.config = config;
+        this.current = null;
+    }
+
+    public static Recovery from(WalConfig config, ByteBuffer segmentHeader) throws IOException {
+        var segments = new ArrayList<Path>();
+
+        try (var filePaths = Files.newDirectoryStream(config.directory())) {
+            for (var path: filePaths) {
+                segments.add(path);
+            }
+        }
+
+        var sortedSegments = segments.stream()
+                .sorted(Comparator.comparingInt(p -> Integer.parseInt(p.getFileName().toString().split("-")[0])))
+                .toList();
+
+        return new Recovery(sortedSegments, config, segmentHeader);
+    }
+
+    private void drainView(SegmentView view) throws IOException {
+        while (view.next() != null) {}
+    }
+
+    private void drainSegments() throws IOException {
+        var view = next();
+
+        while (view != null) {
+            drainView(view);
+            view = next();
+        }
+    }
+
+    public SegmentView next() throws IOException {
+        if (!segments.hasNext() && current == null) {
+            return null;
+        }
+
+        if (!segments.hasNext()) {
+            drainView(current);
+            return null;
+        }
+
+        if (current == null) {
+            return current = new SegmentView(ReadableSegment.open(segments.next(), new CRC32()));
+        }
+
+        drainView(current);
+        if (current.result() instanceof DecodeResult.EndOfSegment(var finalCrc)) {
+            current.close();
+            return current = new SegmentView(ReadableSegment.open(segments.next(), nextCrc(finalCrc)));
+        }
+
+        return null;
+    }
+
+    public CRC32 nextCrc(int crcVal) {
+        var crc = new CRC32();
+        ByteBuffer buf = ByteBuffer.allocate(Integer.BYTES);
+        buf.putInt(crcVal);
+        buf.flip();
+        crc.update(buf);
+        return crc;
+    }
+
+
+    public Wal finish() throws IOException {
+        drainSegments();
+        if (current == null) {
+            var firstSegment = WritableSegment.create(
+                    0,
+                    config.initialIndex(),
+                    config,
+                    segmentHeader,
+                    new CRC32()
+            );
+            var manager = new SegmentManager(
+                    new ArrayList<>(),
+                    firstSegment,
+                    config,
+                    segmentHeader
+            );
+            return Wal.open(manager, config);
+        }
+
+        current.close();
+
+        if (segments.hasNext()) {
+            throw new IllegalStateException("all segments should be valid except the last one");
+        }
+
+
+        var acitvePath = paths.removeLast();
+
+        var active = switch (current.result()) {
+            case DecodeResult.EndOfSegment(var finalCrc) -> WritableSegment.closed(acitvePath, config, nextCrc(finalCrc));
+            case DecodeResult.Corrupt(var position, var lastCrc) ->  WritableSegment.open(acitvePath, position, config, nextCrc(lastCrc));
+            case DecodeResult.EndOfLog(var position, var lastCrc) -> WritableSegment.open(acitvePath, position, config, nextCrc(lastCrc));
+            case DecodeResult.Record _,
+                 DecodeResult.Closed _ -> throw new IllegalStateException("invalid state after draining");
+        };
+
+        var sealedSegments = paths.stream().map(SealedSegment::from).collect(Collectors.toList());
+        var manager = new SegmentManager(sealedSegments, active, config, segmentHeader);
+        return Wal.open(manager, config);
+    }
+}

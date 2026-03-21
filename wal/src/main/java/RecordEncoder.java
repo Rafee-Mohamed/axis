@@ -1,26 +1,41 @@
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.util.zip.CRC32;
 
 public class RecordEncoder {
     private final CRC32 crc;
-    private final ByteBuffer recordBuffer;
+    // CRC + payload length
+    private final ByteBuffer header;
+    private final ByteBuffer padding;
 
     public RecordEncoder(CRC32 crc) {
         this.crc = crc;
-        this.recordBuffer = ByteBuffer.allocateDirect(Long.BYTES + Integer.BYTES);
+        this.padding = ByteBuffer.allocateDirect(Long.BYTES - 1);
+        this.header = ByteBuffer.allocateDirect(Long.BYTES + Integer.BYTES);
     }
 
-    public ByteBuffer encode(ByteBuffer payload) {
-        var length = payload.capacity();
-        crc.update(payload);
+    public void encode(FileChannel channel, ByteBuffer payload) throws IOException {
+        var payloadLength = payload.remaining();
+        var recordLength = payloadLength + header.capacity();
+        var paddingLen = (8 - (recordLength % 8)) % 8;
+        var length = ((long) payloadLength << 8) | paddingLen;
 
-        recordBuffer.clear();
-        recordBuffer.putLong(length);
-        recordBuffer.putInt(crc());
-        recordBuffer.clear();
+        crc.update(payload.duplicate());
 
-        return recordBuffer;
+        header.clear();
+        header.putLong(length);
+        header.putInt(crc());
+        header.flip();
+        channel.write(header);
+
+        channel.write(payload);
+
+        if (paddingLen > 0) {
+            padding.clear();
+            padding.limit(paddingLen);
+            channel.write(padding);
+        }
     }
 
     public int crc() {

@@ -2,7 +2,8 @@ import java.nio.file.Path;
 
 public record WalConfig(
         long segmentSize,
-        long maxRecordSize,
-        Path directory
+        Path directory,
+        long initialIndex,
+        IndexStrategy indexer
 ) implements SegmentConfig {
 }

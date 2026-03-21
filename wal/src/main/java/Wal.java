@@ -12,8 +12,11 @@ public class Wal {
         this.config = config;
     }
 
-    static Wal open(Path directory, WalConfig config, byte[] segmentHeader) throws IOException {
-        var manager = SegmentManager.open(config, segmentHeader);
+    static Recovery recover(WalConfig config, ByteBuffer segmentHeader) throws IOException {
+        return Recovery.from(config, segmentHeader);
+    }
+
+    static Wal open(SegmentManager manager, WalConfig config) {
         return new Wal(manager, config);
     }
 
