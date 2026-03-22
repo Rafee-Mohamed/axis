@@ -12,6 +12,7 @@
         <module>raft</module>
         <module>server</module>
         <module>storage</module>
+        <module>backend-lmdb</module>
         <module>wal</module>
     </modules>
 
