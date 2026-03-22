@@ -1,3 +1,5 @@
+package io.disys.axis.wal;
+
 import java.nio.file.Path;
 
 public class SealedSegment {

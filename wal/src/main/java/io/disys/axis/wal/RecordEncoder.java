@@ -1,7 +1,10 @@
+package io.disys.axis.wal;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.zip.CRC32;
+import static io.disys.axis.wal.WalConstants.*;
 
 public class RecordEncoder {
     private final CRC32 crc;
@@ -11,8 +14,8 @@ public class RecordEncoder {
 
     public RecordEncoder(CRC32 crc) {
         this.crc = crc;
-        this.padding = ByteBuffer.allocateDirect(Long.BYTES - 1);
-        this.header = ByteBuffer.allocateDirect(Long.BYTES + Integer.BYTES);
+        this.padding = ByteBuffer.allocateDirect(MAX_PADDING);
+        this.header = ByteBuffer.allocateDirect(RECORD_HEADER_SIZE);
     }
 
     public void encode(FileChannel channel, ByteBuffer payload) throws IOException {

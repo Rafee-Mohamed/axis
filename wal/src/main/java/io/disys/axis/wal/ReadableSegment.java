@@ -1,20 +1,30 @@
+package io.disys.axis.wal;
+
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.zip.CRC32;
+import static io.disys.axis.wal.WalConstants.*;
 
 public class ReadableSegment {
     private final RecordDecoder decoder;
     private final FileChannel channel;
     private final ByteBuffer header;
-    private static final int FOOTER_SIZE = Integer.BYTES;
 
     private ReadableSegment(FileChannel channel, ByteBuffer header, RecordDecoder decoder) {
         this.channel = channel;
         this.header = header;
         this.decoder = decoder;
+    }
+
+    private static void readFully(FileChannel channel, ByteBuffer buf) throws IOException {
+        while (buf.hasRemaining()) {
+            int n = channel.read(buf);
+            if (n < 0) throw new EOFException("unexpected EOF");
+        }
     }
 
     public static ReadableSegment open(Path path, CRC32 crc32) throws IOException {
@@ -24,11 +34,14 @@ public class ReadableSegment {
     }
 
     private static ByteBuffer readHeader(FileChannel channel) throws IOException {
-        var lengthBuf = ByteBuffer.allocateDirect(Integer.BYTES);
-        channel.read(lengthBuf);
+        var lengthBuf = ByteBuffer.allocateDirect(SEGMENT_HEADER_LENGTH_PREFIX);
+        readFully(channel, lengthBuf);
         lengthBuf.flip();
+
         var header = ByteBuffer.allocateDirect(lengthBuf.getInt());
-        channel.read(header);
+        readFully(channel, header);
+        header.flip();
+
         return header;
     }
 
@@ -49,7 +62,7 @@ public class ReadableSegment {
 
     private DecodeResult.EndOfSegment readFooter() throws IOException {
         var footer = ByteBuffer.allocateDirect(FOOTER_SIZE);
-        channel.read(footer);
+        readFully(channel, footer);
         footer.flip();
         return new DecodeResult.EndOfSegment(footer.getInt());
     }

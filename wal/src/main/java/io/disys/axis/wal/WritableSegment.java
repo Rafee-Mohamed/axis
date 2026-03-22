@@ -1,3 +1,5 @@
+package io.disys.axis.wal;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -5,11 +7,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.zip.CRC32;
+import static io.disys.axis.wal.WalConstants.*;
 
 public class WritableSegment {
-
-    private static final int PAGE_SIZE = 4096;
-    private static final int FOOTER_SIZE = Integer.BYTES;
 
     private final Path path;
     private final SegmentConfig config;
@@ -39,7 +39,7 @@ public class WritableSegment {
         return dir.resolve(segment + "-" + index);
     }
 
-    public static WritableSegment create(int segment, long index, SegmentConfig config, ByteBuffer segmentHeader, CRC32 crc32) throws IOException {
+    public static WritableSegment create(int segment, long index, SegmentConfig config, CRC32 crc32) throws IOException {
         var path = segmentPath(config.directory(), segment, index);
         var channel = FileChannel.open(
                 path,
@@ -47,7 +47,7 @@ public class WritableSegment {
                 StandardOpenOption.CREATE_NEW
         );
         preallocate(channel, config.segmentSize());
-        writeHeader(channel, segmentHeader);
+        writeHeader(channel, config.segmentHeader());
         channel.force(true);
         return new WritableSegment(path, channel, config, new RecordEncoder(crc32));
     }
@@ -82,14 +82,18 @@ public class WritableSegment {
         channel.position(0);
     }
 
-    private boolean exceedsSize(int size) throws IOException {
-        return channel.position() + size + FOOTER_SIZE > config.segmentSize();
+    private boolean exceedsSize(long position, int payloadSize) throws IOException {
+        return position + payloadSize + RECORD_OVERHEAD + FOOTER_SIZE > config.segmentSize();
+    }
+
+    private long recordSize(int payloadSize) {
+        return RECORD_OVERHEAD + payloadSize;
     }
 
     public boolean append(ByteBuffer payload) throws IOException {
         if (!isOpen()) return false;
 
-        if (exceedsSize(payload.remaining())) {
+        if (exceedsSize(channel.position(), payload.remaining())) {
             return false;
         }
         encoder.encode(channel, payload);
@@ -97,13 +101,26 @@ public class WritableSegment {
         return true;
     }
 
+    private int payloadWithinSizeLimit(List<ByteBuffer> payload) throws IOException {
+        var payloadWithinSizeLimit = 0;
+        var projectedPosition = channel.position();
+        while (payloadWithinSizeLimit < payload.size()) {
+            var payloadSize = payload.get(payloadWithinSizeLimit).remaining();
+            var recordSize = recordSize(payloadSize);
+            if (exceedsSize(projectedPosition, payloadSize)) {
+                break;
+            }
+            projectedPosition += recordSize;
+            payloadWithinSizeLimit++;
+        }
+
+        return payloadWithinSizeLimit;
+    }
+
     public List<ByteBuffer> append(List<ByteBuffer> payload) throws IOException {
         if (!isOpen()) return payload;
 
-        var payloadWithinSizeLimit = 0;
-        while (payloadWithinSizeLimit < payload.size() && !exceedsSize(payload.get(payloadWithinSizeLimit).remaining())) {
-            payloadWithinSizeLimit++;
-        }
+        var payloadWithinSizeLimit = payloadWithinSizeLimit(payload);
 
         var payloadToAppend = payload.subList(0, payloadWithinSizeLimit);
         if (payloadToAppend.isEmpty()) {

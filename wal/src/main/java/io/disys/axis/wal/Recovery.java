@@ -1,3 +1,5 @@
+package io.disys.axis.wal;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -13,18 +15,16 @@ public class Recovery {
     private SegmentView current;
     private final Iterator<Path> segments;
     private final List<Path> paths;
-    private final ByteBuffer segmentHeader;
     private final WalConfig config;
 
-    private Recovery(List<Path> paths, WalConfig config, ByteBuffer segmentHeader) {
+    private Recovery(List<Path> paths, WalConfig config) {
         this.segments = paths.iterator();
         this.paths = paths;
-        this.segmentHeader = segmentHeader;
         this.config = config;
         this.current = null;
     }
 
-    public static Recovery from(WalConfig config, ByteBuffer segmentHeader) throws IOException {
+    public static Recovery from(WalConfig config) throws IOException {
         var segments = new ArrayList<Path>();
 
         try (var filePaths = Files.newDirectoryStream(config.directory())) {
@@ -35,9 +35,9 @@ public class Recovery {
 
         var sortedSegments = segments.stream()
                 .sorted(Comparator.comparingInt(p -> Integer.parseInt(p.getFileName().toString().split("-")[0])))
-                .toList();
+                .collect(Collectors.toCollection(ArrayList::new));
 
-        return new Recovery(sortedSegments, config, segmentHeader);
+        return new Recovery(sortedSegments, config);
     }
 
     private void drainView(SegmentView view) throws IOException {
@@ -93,14 +93,12 @@ public class Recovery {
                     0,
                     config.initialIndex(),
                     config,
-                    segmentHeader,
                     new CRC32()
             );
             var manager = new SegmentManager(
                     new ArrayList<>(),
                     firstSegment,
-                    config,
-                    segmentHeader
+                    config
             );
             return Wal.open(manager, config);
         }
@@ -122,8 +120,8 @@ public class Recovery {
                  DecodeResult.Closed _ -> throw new IllegalStateException("invalid state after draining");
         };
 
-        var sealedSegments = paths.stream().map(SealedSegment::from).collect(Collectors.toList());
-        var manager = new SegmentManager(sealedSegments, active, config, segmentHeader);
+        var sealedSegments = paths.stream().map(SealedSegment::from).collect(Collectors.toCollection(ArrayList::new));
+        var manager = new SegmentManager(sealedSegments, active, config);
         return Wal.open(manager, config);
     }
 }

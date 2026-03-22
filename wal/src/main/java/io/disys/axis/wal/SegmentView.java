@@ -1,6 +1,7 @@
+package io.disys.axis.wal;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.List;
 
 public class SegmentView implements AutoCloseable {
     private final ReadableSegment segment;
@@ -11,11 +12,11 @@ public class SegmentView implements AutoCloseable {
         this.result = null;
     }
 
-    ByteBuffer header() {
+    public ByteBuffer header() {
         return segment.header();
     }
 
-    ByteBuffer next() throws IOException {
+    public ByteBuffer next() throws IOException {
         if (!segment.isOpen() || result != null) {
             return null;
         }

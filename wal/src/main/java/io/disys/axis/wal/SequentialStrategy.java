@@ -1,3 +1,5 @@
+package io.disys.axis.wal;
+
 import java.nio.ByteBuffer;
 
 public class SequentialStrategy implements IndexStrategy {

@@ -1,7 +1,11 @@
+package io.disys.axis.wal;
+
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.zip.CRC32;
+import static io.disys.axis.wal.WalConstants.*;
 
 public class RecordDecoder {
     private final CRC32 crc;
@@ -9,13 +13,20 @@ public class RecordDecoder {
 
     public RecordDecoder(CRC32 crc) {
         this.crc = crc;
-        this.header = ByteBuffer.allocateDirect(Long.BYTES + Integer.BYTES);
+        this.header = ByteBuffer.allocateDirect(RECORD_HEADER_SIZE);
+    }
+
+    private static void readFully(FileChannel ch, ByteBuffer buf) throws IOException {
+        while (buf.hasRemaining()) {
+            int n = ch.read(buf);
+            if (n < 0) throw new EOFException("unexpected EOF");
+        }
     }
 
     public DecodeResult decode(FileChannel channel) throws IOException {
         header.clear();
 
-        channel.read(header);
+        readFully(channel, header);
         header.flip();
 
         var lengthAndPadding = header.getLong();
@@ -30,7 +41,7 @@ public class RecordDecoder {
         var padding = lengthAndPadding & 0xFF;
 
         var payload = ByteBuffer.allocateDirect(length);
-        channel.read(payload);
+        readFully(channel, payload);
         payload.flip();
 
         var previousCrc = (int) crc.getValue();
