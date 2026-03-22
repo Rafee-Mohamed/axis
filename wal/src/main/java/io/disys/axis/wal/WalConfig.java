@@ -12,6 +12,7 @@ public record WalConfig(
         ByteBuffer segmentHeader,
         long maxRecordSize
 ) implements SegmentConfig {
+
     public static final class Builder {
         private long segmentSize = DEFAULT_SEGMENT_SIZE;
         private Path directory;

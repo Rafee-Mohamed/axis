@@ -24,12 +24,20 @@ public class Wal {
     public void append(ByteBuffer payload) throws IOException, RecordTooLargeException, WalClosedException {
         validateRecordSize(payload);
         throwIfClosed();
-        manager.append(payload);
+        appendValid(payload);
     }
 
     public void append(List<ByteBuffer> payload) throws IOException, RecordTooLargeException, WalClosedException {
         validateRecordSize(payload);
         throwIfClosed();
+        appendValid(payload);
+    }
+
+    public void appendValid(ByteBuffer payload) throws IOException {
+        manager.append(payload);
+    }
+
+    public void appendValid(List<ByteBuffer> payload) throws IOException {
         manager.append(payload);
     }
 
