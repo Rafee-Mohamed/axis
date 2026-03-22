@@ -18,6 +18,14 @@ public class RecordEncoder {
         this.header = ByteBuffer.allocateDirect(RECORD_HEADER_SIZE);
     }
 
+
+    private static void writeFully(FileChannel channel, ByteBuffer buf) throws IOException {
+        while (buf.hasRemaining()) {
+            channel.write(buf);
+        }
+    }
+
+
     public void encode(FileChannel channel, ByteBuffer payload) throws IOException {
         var payloadLength = payload.remaining();
         var recordLength = payloadLength + header.capacity();
@@ -30,14 +38,14 @@ public class RecordEncoder {
         header.putLong(length);
         header.putInt(crc());
         header.flip();
-        channel.write(header);
+        writeFully(channel, header);
 
-        channel.write(payload);
+        writeFully(channel, payload);
 
         if (paddingLen > 0) {
             padding.clear();
             padding.limit(paddingLen);
-            channel.write(padding);
+            writeFully(channel, padding);
         }
     }
 

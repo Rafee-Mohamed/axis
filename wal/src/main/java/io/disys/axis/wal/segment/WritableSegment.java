@@ -61,7 +61,7 @@ public class WritableSegment {
         header.put(segmentHeader.duplicate());
         header.flip();
 
-        channel.write(header);
+        writeFully(channel, header);
         channel.force(false);
     }
 
@@ -71,17 +71,23 @@ public class WritableSegment {
 
         while (size >= PAGE_SIZE) {
             zeros.clear();
-            channel.write(zeros);
+            writeFully(channel, zeros);
             size -= PAGE_SIZE;
         }
 
         if (size > 0) {
             zeros.clear();
             zeros.limit((int) size);
-            channel.write(zeros);
+            writeFully(channel, zeros);
         }
 
         channel.position(0);
+    }
+
+    private static void writeFully(FileChannel channel, ByteBuffer buf) throws IOException {
+        while (buf.hasRemaining()) {
+            channel.write(buf);
+        }
     }
 
     private boolean exceedsSize(long position, int payloadSize) throws IOException {
@@ -149,7 +155,9 @@ public class WritableSegment {
         var footer = ByteBuffer.allocateDirect(FOOTER_SIZE);
         footer.putInt(encoder.crc());
         footer.flip();
-        channel.write(footer);
+        writeFully(channel, footer);
+        // truncate any extra space
+        channel.truncate(channel.position());
         channel.force(false);
         channel.close();
     }
