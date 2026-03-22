@@ -1,4 +1,7 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.segment;
+
+import io.disys.axis.wal.codec.DecodeResult;
+import io.disys.axis.wal.codec.RecordDecoder;
 
 import java.io.EOFException;
 import java.io.IOException;
@@ -7,7 +10,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.zip.CRC32;
-import static io.disys.axis.wal.WalConstants.*;
+import static io.disys.axis.wal.internal.WalConstants.*;
 
 public class ReadableSegment {
     private final RecordDecoder decoder;

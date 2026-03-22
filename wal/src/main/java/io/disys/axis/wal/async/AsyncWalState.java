@@ -1,6 +1,6 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.async;
 
-public enum State {
+public enum AsyncWalState {
     CREATED,
     RUNNING,
     CLOSING,

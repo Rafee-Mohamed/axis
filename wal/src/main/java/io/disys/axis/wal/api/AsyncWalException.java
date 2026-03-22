@@ -1,4 +1,6 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.api;
+
+import io.disys.axis.wal.async.AsyncWalState;
 
 public sealed class AsyncWalException extends Exception permits
         AsyncWalException.GracefulShutdown,
@@ -17,7 +19,7 @@ public sealed class AsyncWalException extends Exception permits
     }
 
     public static final class UnexpectedState extends AsyncWalException {
-        public UnexpectedState(State expected, State actual) {
+        public UnexpectedState(AsyncWalState expected, AsyncWalState actual) {
             super("Expected WAL to be in " + expected + " but was " + actual);
         }
     }

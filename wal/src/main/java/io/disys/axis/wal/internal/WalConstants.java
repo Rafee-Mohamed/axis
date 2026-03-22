@@ -1,4 +1,4 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.internal;
 
 public final class WalConstants {
     private WalConstants() {}

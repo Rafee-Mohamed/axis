@@ -1,4 +1,9 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.recovery;
+
+import io.disys.axis.wal.api.Wal;
+import io.disys.axis.wal.api.WalConfig;
+import io.disys.axis.wal.codec.DecodeResult;
+import io.disys.axis.wal.segment.*;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -95,7 +100,7 @@ public class Recovery {
                     config,
                     new CRC32()
             );
-            var manager = new SegmentManager(
+            var manager = SegmentManager.open(
                     new ArrayList<>(),
                     firstSegment,
                     config
@@ -121,7 +126,7 @@ public class Recovery {
         };
 
         var sealedSegments = paths.stream().map(SealedSegment::from).collect(Collectors.toCollection(ArrayList::new));
-        var manager = new SegmentManager(sealedSegments, active, config);
+        var manager = SegmentManager.open(sealedSegments, active, config);
         return Wal.open(manager, config);
     }
 }

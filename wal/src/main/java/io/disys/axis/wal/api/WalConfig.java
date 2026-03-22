@@ -1,8 +1,12 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.api;
+
+import io.disys.axis.wal.index.IndexStrategy;
+import io.disys.axis.wal.segment.SegmentConfig;
+import io.disys.axis.wal.index.SequentialStrategy;
 
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
-import static io.disys.axis.wal.WalConstants.*;
+import static io.disys.axis.wal.internal.WalConstants.*;
 
 public record WalConfig(
         long segmentSize,

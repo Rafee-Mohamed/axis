@@ -1,4 +1,4 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.api;
 
 public class RecordTooLargeException extends Exception {
     public RecordTooLargeException(long payloadSize, long maxRecordSize) {

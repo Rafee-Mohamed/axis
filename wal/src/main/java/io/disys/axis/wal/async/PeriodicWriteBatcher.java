@@ -1,4 +1,6 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.async;
+
+import io.disys.axis.wal.api.AsyncWal;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -6,11 +8,11 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
-class PeriodicWriteBatcher implements WriteBatcher {
+public class PeriodicWriteBatcher implements WriteBatcher {
     private final long interval;
     private long nextWriteTime;
 
-    PeriodicWriteBatcher(long interval) {
+    public PeriodicWriteBatcher(long interval) {
         this.interval = TimeUnit.MILLISECONDS.toNanos(interval);
         this.nextWriteTime = System.nanoTime() + this.interval;
     }

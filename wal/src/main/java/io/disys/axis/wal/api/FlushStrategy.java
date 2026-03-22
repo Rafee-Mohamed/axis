@@ -1,4 +1,4 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.api;
 
 public sealed interface FlushStrategy {
     record OnDemand() implements FlushStrategy {}

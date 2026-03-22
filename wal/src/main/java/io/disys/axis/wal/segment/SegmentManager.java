@@ -1,9 +1,8 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.segment;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.CRC32;
@@ -17,6 +16,10 @@ public class SegmentManager {
         this.segments = segments;
         this.active = active;
         this.config = config;
+    }
+
+    public static SegmentManager open(List<SealedSegment> segments, WritableSegment active, SegmentConfig config) {
+        return new SegmentManager(segments, active, config);
     }
 
 

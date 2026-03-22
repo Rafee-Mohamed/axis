@@ -1,4 +1,6 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.segment;
+
+import io.disys.axis.wal.codec.DecodeResult;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -29,7 +31,7 @@ public class SegmentView implements AutoCloseable {
         return null;
     }
 
-    DecodeResult result() {
+    public DecodeResult result() {
         return result;
     }
 

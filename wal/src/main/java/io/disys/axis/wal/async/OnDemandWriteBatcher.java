@@ -1,10 +1,12 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.async;
+
+import io.disys.axis.wal.api.AsyncWal;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 
-class OnDemandWriteBatcher implements WriteBatcher {
+public class OnDemandWriteBatcher implements WriteBatcher {
 
     @Override
     public List<AsyncWal.PendingWrite> next(BlockingQueue<AsyncWal.PendingWrite> writes) throws InterruptedException {

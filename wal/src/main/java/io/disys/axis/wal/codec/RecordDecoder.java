@@ -1,11 +1,11 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.codec;
 
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.zip.CRC32;
-import static io.disys.axis.wal.WalConstants.*;
+import static io.disys.axis.wal.internal.WalConstants.*;
 
 public class RecordDecoder {
     private final CRC32 crc;

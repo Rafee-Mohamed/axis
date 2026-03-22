@@ -1,4 +1,7 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.api;
+
+import io.disys.axis.wal.recovery.Recovery;
+import io.disys.axis.wal.segment.SegmentManager;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -17,7 +20,7 @@ public class Wal {
         return Recovery.from(config);
     }
 
-    static Wal open(SegmentManager manager, WalConfig config) {
+    public static Wal open(SegmentManager manager, WalConfig config) {
         return new Wal(manager, config);
     }
 

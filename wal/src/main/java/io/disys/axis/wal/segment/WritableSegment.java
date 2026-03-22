@@ -1,4 +1,6 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.segment;
+
+import io.disys.axis.wal.codec.RecordEncoder;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -7,7 +9,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.zip.CRC32;
-import static io.disys.axis.wal.WalConstants.*;
+import static io.disys.axis.wal.internal.WalConstants.*;
 
 public class WritableSegment {
 

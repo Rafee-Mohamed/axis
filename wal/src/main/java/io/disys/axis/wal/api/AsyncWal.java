@@ -1,4 +1,9 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.api;
+
+import io.disys.axis.wal.async.AsyncWalState;
+import io.disys.axis.wal.async.OnDemandWriteBatcher;
+import io.disys.axis.wal.async.PeriodicWriteBatcher;
+import io.disys.axis.wal.async.WriteBatcher;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -10,17 +15,17 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsyncWal {
-    record PendingWrite(List<ByteBuffer> payload, CompletableFuture<Void> future) {}
+    public record PendingWrite(List<ByteBuffer> payload, CompletableFuture<Void> future) {}
 
     private final PendingWrite POISON = new PendingWrite(List.of(), new CompletableFuture<>());
     private final Wal wal;
     private final BlockingQueue<PendingWrite> writes;
-    private final AtomicReference<State> state;
+    private final AtomicReference<AsyncWalState> state;
     private final WriteBatcher batcher;
 
-    AsyncWal(Wal wal, AsyncWalConfig config) {
+    public AsyncWal(Wal wal, AsyncWalConfig config) {
         this.wal = wal;
-        this.state =  new AtomicReference<>(State.CREATED);
+        this.state =  new AtomicReference<>(AsyncWalState.CREATED);
         this.writes = new ArrayBlockingQueue<>(config.maxPendingWrites());
         this.batcher = switch (config.flushStrategy()) {
             case FlushStrategy.OnDemand _ -> new OnDemandWriteBatcher();
@@ -29,10 +34,10 @@ public class AsyncWal {
     }
 
     public CompletableFuture<Void> append(List<ByteBuffer> payload) throws InterruptedException {
-        var currentState = state.get();
-        if (currentState != State.RUNNING) {
+        var currentAsyncWalState = state.get();
+        if (currentAsyncWalState != AsyncWalState.RUNNING) {
             return CompletableFuture.failedFuture(
-                    new AsyncWalException.UnexpectedState(State.RUNNING, currentState)
+                    new AsyncWalException.UnexpectedState(AsyncWalState.RUNNING, currentAsyncWalState)
             );
         }
 
@@ -55,8 +60,8 @@ public class AsyncWal {
         }
     }
 
-    public State close() throws InterruptedException {
-        if (state.compareAndSet(State.RUNNING, State.CLOSING)) {
+    public AsyncWalState close() throws InterruptedException {
+        if (state.compareAndSet(AsyncWalState.RUNNING, AsyncWalState.CLOSING)) {
             writes.put(POISON);
         }
         return state.get();
@@ -81,7 +86,7 @@ public class AsyncWal {
     }
 
     private void fail(List<PendingWrite> failedWrites, Throwable t) throws AsyncWalException.Terminated {
-        state.set(State.FAILED);
+        state.set(AsyncWalState.FAILED);
         failWrites(failedWrites, t);
         drainAndFail(t);
         tryCloseWal();
@@ -104,11 +109,11 @@ public class AsyncWal {
     }
 
     public void run() throws AsyncWalException {
-        if (!state.compareAndSet(State.CREATED, State.RUNNING)) {
-            throw new AsyncWalException.UnexpectedState(State.CREATED, state.get());
+        if (!state.compareAndSet(AsyncWalState.CREATED, AsyncWalState.RUNNING)) {
+            throw new AsyncWalException.UnexpectedState(AsyncWalState.CREATED, state.get());
         }
 
-        while (state.get() == State.RUNNING || state.get() == State.CLOSING) {
+        while (state.get() == AsyncWalState.RUNNING || state.get() == AsyncWalState.CLOSING) {
             List<PendingWrite> batch = List.of();
             try {
                 batch = batcher.next(writes);
@@ -120,10 +125,10 @@ public class AsyncWal {
                     // poison intercepted successfully
                     batch.get(poisonIndex).future().complete(null);
                     batch = batch.subList(0, poisonIndex);
-                    failWrites(writesToFail, new AsyncWalException.UnexpectedState(State.RUNNING, state.get()));
+                    failWrites(writesToFail, new AsyncWalException.UnexpectedState(AsyncWalState.RUNNING, state.get()));
                     performWrites(batch);
                     tryCloseWal();
-                    state.set(State.CLOSED);
+                    state.set(AsyncWalState.CLOSED);
                     throw new AsyncWalException.GracefulShutdown();
                 }
 

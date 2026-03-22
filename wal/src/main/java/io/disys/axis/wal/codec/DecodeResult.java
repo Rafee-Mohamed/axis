@@ -1,4 +1,4 @@
-package io.disys.axis.wal;
+package io.disys.axis.wal.codec;
 
 import java.nio.ByteBuffer;
 
