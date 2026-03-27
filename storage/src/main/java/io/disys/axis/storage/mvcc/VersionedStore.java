@@ -51,7 +51,7 @@ public class VersionedStore {
 
     // multiple readers allowed, can called by multiple threads to get readers
     public Reader reader() {
-        return new VersionedStoreReader(db, index, backend.beginRead(), buffer, encoder, decoder, state.lastVisibleCommitSeq());
+        return VersionedStoreReader.create(db, index, backend.beginRead(), buffer, encoder, decoder, state);
     }
 
 
