@@ -1,0 +1,46 @@
+package io.disys.axis.storage.mvcc;
+
+import io.disys.axis.storage.backend.CloseableIterator;
+
+import java.io.IOException;
+import java.util.Optional;
+
+public class VersionedStoreWriter implements Writer {
+
+    private final WriteSession session;
+    private int ordinal;
+
+    public VersionedStoreWriter(WriteSession session) {
+        this.session = session;
+        this.ordinal = 0;
+    }
+
+    @Override
+    public void put(byte[] key, byte[] val) throws IOException {
+        session.put(key, val, ordinal++);
+    }
+
+    @Override
+    public boolean delete(byte[] key) throws IOException {
+        return session.delete(key, ordinal++);
+    }
+
+    @Override
+    public Optional<Record> get(byte[] key) throws IOException {
+        return session.get(key);
+    }
+
+    @Override
+    public CloseableIterator<KeyVal> range(byte[] key, byte[] val) {
+        return session.range(key, val);
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (ordinal == 0) {
+            // nothing written so no need to advance
+            return;
+        }
+        session.advance();
+    }
+}

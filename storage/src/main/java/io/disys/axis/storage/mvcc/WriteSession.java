@@ -1,0 +1,131 @@
+package io.disys.axis.storage.mvcc;
+
+import io.disys.axis.storage.backend.CloseableIterator;
+import io.disys.axis.storage.backend.WriteTxn;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+
+public class WriteSession implements AutoCloseable {
+    private final WriteTxn txn;
+    private final KeyTimelineIndex index;
+    private final RevisionRecordBuffer buffer;
+    private final StoreState state;
+    private final VersionedStoreConfig config;
+    private final long expiryTime;
+    private final RecordEncoder encoder;
+    private final RecordDecoder decoder;
+    private final VersionedStore.Db db;
+
+    WriteSession(
+            VersionedStoreConfig config,
+            VersionedStore.Db db,
+            WriteTxn txn,
+            KeyTimelineIndex index,
+            RevisionRecordBuffer buffer,
+            StoreState state,
+            RecordEncoder encoder,
+            RecordDecoder decoder
+    ) {
+        this.config = config;
+        this.txn = txn;
+        this.index = index;
+        this.buffer = buffer;
+        this.state = state;
+        this.encoder = encoder;
+        this.decoder = decoder;
+        this.db = db;
+        this.expiryTime = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.revisionRecordBufferSyncTimeout());
+    }
+
+    boolean expired() {
+        return buffer.size() >= config.maxRevisionRecordBuffer() ||
+                System.nanoTime() >= expiryTime;
+    }
+
+    boolean closeIfExpired() throws IOException {
+        if (expired()) {
+            close();
+            return true;
+        }
+
+        return false;
+    }
+
+
+
+    @Override
+    public void close() throws IOException {
+        txn.put(
+                db.meta(),
+                db.meta().persistedCommitSeqKey(),
+                ByteBuffer.allocate(Long.BYTES).putLong(state.lastVisibleCommitSeq()).array()
+        );
+        txn.commit();
+        txn.close();
+    }
+
+    void put(byte[] key, byte[] val, int ordinal) throws IOException {
+        var revision = new Revision(state.lastVisibleCommitSeq() + 1, ordinal);
+        var timeline = index.add(key, revision);
+        var span = timeline.last();
+        var revisionRecord = encoder.encode(revision, key, val, span);
+        buffer.add(revisionRecord);
+        txn.put(db.revision(), revisionRecord.revision(), revisionRecord.record());
+    }
+
+    boolean delete(byte[] key, int ordinal) throws IOException {
+        var revision = new Revision(state.lastVisibleCommitSeq() + 1, ordinal);
+        var timeline = index.complete(key, revision);
+        if (timeline.isEmpty()) {
+            return false;
+        }
+        var span = timeline.get().last();
+        var revisionRecord = encoder.encode(revision, key, span);
+        buffer.add(revisionRecord);
+        txn.put(db.revision(), revisionRecord.revision(), revisionRecord.record());
+        return true;
+    }
+
+    public Optional<Record> get(byte[] key) {
+        var timeline = index.get(key);
+        return timeline.flatMap(
+                keyTimeline -> txn.get(db.revision(), encoder.encodeRevision(keyTimeline.lastRevision()))
+                .map(decoder::decodeRecord));
+    }
+
+    public CloseableIterator<KeyVal> range(byte[] start, byte[] end) {
+        return null;
+    }
+
+    public void advance() throws IOException {
+        state.advanceCommitSeq();
+    }
+
+    public void compact(long commitSeq) {
+        txn.put(
+                db.meta(),
+                db.meta().firstCommitSeqKey(),
+                ByteBuffer.allocate(Long.BYTES)
+                        .putLong(commitSeq)
+                        .array()
+        );
+        state.compactCommitSeq(commitSeq);
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
