@@ -18,10 +18,10 @@ public class RecordEncoder {
         var key = record.key();
         var val = record.val();
 
-        var keyValSize = Long.BYTES + key.length + val.length;
+        var keyValSize = KEY_LEN_SIZE + key.length + val.length;
         var encodedRecord = ByteBuffer.allocate(TOMBSTONE_MARKER_SIZE + keyValSize + METADATA_SIZE);
 
-        encodedRecord.put(record.isTombstone() ? TOMBSTONE : NO_TOMBSTONE);
+        encodedRecord.put(record.tombstone() ? TOMBSTONE : NO_TOMBSTONE);
 
         encodedRecord.putInt(key.length);
         encodedRecord.put(key);

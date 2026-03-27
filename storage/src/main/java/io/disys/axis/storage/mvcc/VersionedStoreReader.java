@@ -59,7 +59,7 @@ public class VersionedStoreReader implements Reader {
 
     private static long getCommitSeq(ReadTxn txn, VersionedStore.MetaDb db, byte[] key) {
         return txn.get(db, key)
-                .map(b -> ByteBuffer.allocate(Long.BYTES).put(b).getLong())
+                .map(b -> ByteBuffer.allocate(Long.BYTES).put(b).flip().getLong())
                 .orElse(0L);
     }
 

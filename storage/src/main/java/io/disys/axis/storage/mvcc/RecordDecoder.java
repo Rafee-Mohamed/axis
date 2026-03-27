@@ -18,11 +18,12 @@ public class RecordDecoder {
         var key = new byte[buffer.getInt()];
         buffer.get(key);
         var val = new byte[record.length - RECORD_OVERHEAD - key.length];
-        if (tombstone == NO_TOMBSTONE) {
+        var isTombstone = tombstone == TOMBSTONE;
+        if (!isTombstone) {
             buffer.get(val);
         }
 
-        return new Record(key, val, buffer.getInt(), buffer.getLong(), buffer.getLong());
+        return new Record(key, val, isTombstone, buffer.getInt(), buffer.getLong(), buffer.getLong());
     }
 
     Revision decodeRevision(byte[] revision) {
