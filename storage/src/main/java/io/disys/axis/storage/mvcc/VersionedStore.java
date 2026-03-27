@@ -40,9 +40,17 @@ public class VersionedStore {
 
     private static StoreState getState(Backend backend, MetaDb db) throws Exception {
         try (var readTxn = backend.beginRead()) {
-            var buffer = ByteBuffer.wrap(readTxn.get(db, db.persistedCommitSeqKey()).orElseGet(() -> new byte[Long.BYTES]));
-            var lastCommitSeq = buffer.getLong();
-            return new StoreState(lastCommitSeq, 0);
+            var lastPersistedCommitSeq = readTxn.get(db, db.persistedCommitSeqKey())
+                    .map(ByteBuffer::wrap)
+                    .map(ByteBuffer::getLong)
+                    .orElse(0L);
+
+            var firstVisibleCommitSeq = readTxn.get(db, db.firstCommitSeqKey())
+                    .map(ByteBuffer::wrap)
+                    .map(ByteBuffer::getLong)
+                    .orElse(0L);
+
+            return new StoreState(lastPersistedCommitSeq, firstVisibleCommitSeq);
         }
     }
 
@@ -59,7 +67,7 @@ public class VersionedStore {
 
     // Behaviour of concurrent threads accessing these are undefined
     public void compact(long commitSeq) throws IOException {
-        if (state.firstVisibleCommitSeq() < commitSeq) {
+        if (state.firstVisibleCommitSeq() >= commitSeq) {
             return;
         }
         // add the compaction point
