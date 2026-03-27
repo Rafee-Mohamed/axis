@@ -1,7 +1,8 @@
 package io.disys.axis.storage.backend;
 
-public record Database(String name) {
+public interface Database {
+    String name();
     static Database of(String name) {
-        return new Database(name);
+        return () -> name;
     }
 }
