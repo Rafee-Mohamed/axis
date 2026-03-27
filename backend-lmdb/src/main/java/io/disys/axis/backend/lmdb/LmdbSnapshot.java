@@ -1,18 +1,34 @@
 package io.disys.axis.backend.lmdb;
 
 import io.disys.axis.storage.backend.Snapshot;
+import org.lmdbjava.Env;
 
 import java.io.IOException;
-import java.nio.channels.WritableByteChannel;
+import java.nio.ByteBuffer;
+import java.nio.file.Path;
 
 final class LmdbSnapshot implements Snapshot {
+
+    private final Env<ByteBuffer> env;
+    private final Path destination;
+
+    LmdbSnapshot(Env<ByteBuffer> env, Path destination) {
+        this.env = env;
+        this.destination = destination;
+    }
+
     @Override
-    public void writeTo(WritableByteChannel destination) throws IOException {
+    public void take() throws IOException {
+        try {
+            env.copy(destination.toFile());
+        } catch (Exception e) {
+            throw new IOException("snapshot failed: ", e);
+        }
     }
 
     @Override
     public long size() {
-        return 0;
+        return destination.toFile().length();
     }
 
     @Override

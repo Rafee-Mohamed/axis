@@ -13,6 +13,7 @@ import java.util.Map;
 public class LmdbBackend implements Backend {
     private final Env<ByteBuffer> env;
     private final Map<Database, Dbi<ByteBuffer>> dbs;
+    private final LmdbConfig config;
 
     public LmdbBackend(LmdbConfig config) {
         var dirFile = config.directory().toFile();
@@ -32,23 +33,25 @@ public class LmdbBackend implements Backend {
             }
             txn.commit();
         }
+
+        this.config = config;
     }
 
     @Override
-    public WriteTx beginWrite() {
+    public WriteTxn beginWrite() {
         var txn = env.txnWrite();
-        return new LmdbWriteTx(txn, dbs);
+        return new LmdbWriteTxn(txn, dbs);
     }
 
     @Override
-    public ReadTx beginRead() {
+    public ReadTxn beginRead() {
         var txn = env.txnRead();
-        return new LmdbReadTx(txn, dbs);
+        return new LmdbReadTxn(txn, dbs);
     }
 
     @Override
     public Snapshot snapshot() {
-        return new LmdbSnapshot();
+        return new LmdbSnapshot(env, config.snapshotDestination());
     }
 
     @Override
