@@ -67,32 +67,40 @@ public class WriteSession implements AutoCloseable {
         txn.close();
     }
 
+
     void put(byte[] key, byte[] val, int ordinal) throws IOException {
         var revision = new Revision(state.lastVisibleCommitSeq() + 1, ordinal);
+
         var timeline = index.add(key, revision);
         var span = timeline.last();
-        var revisionRecord = encoder.encode(revision, key, val, span);
-        buffer.add(revisionRecord);
-        txn.put(db.revision(), revisionRecord.revision(), revisionRecord.record());
+
+        var record = new Record(key, val, span);
+        buffer.add(new RevisionRecord(revision, record));
+
+        txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
     }
 
     boolean delete(byte[] key, int ordinal) throws IOException {
         var revision = new Revision(state.lastVisibleCommitSeq() + 1, ordinal);
         var timeline = index.complete(key, revision);
+
         if (timeline.isEmpty()) {
             return false;
         }
+
         var span = timeline.get().last();
-        var revisionRecord = encoder.encode(revision, key, span);
-        buffer.add(revisionRecord);
-        txn.put(db.revision(), revisionRecord.revision(), revisionRecord.record());
+        var record = new Record(key, span);
+
+        buffer.add(new RevisionRecord(revision, record));
+        txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
+
         return true;
     }
 
     public Optional<Record> get(byte[] key) {
         var timeline = index.get(key);
         return timeline.flatMap(
-                keyTimeline -> txn.get(db.revision(), encoder.encodeRevision(keyTimeline.lastRevision()))
+                keyTimeline -> txn.get(db.revision(), encoder.encode(keyTimeline.lastRevision()))
                 .map(decoder::decodeRecord));
     }
 
