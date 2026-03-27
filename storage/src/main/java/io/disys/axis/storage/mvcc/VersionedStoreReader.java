@@ -93,11 +93,11 @@ public class VersionedStoreReader implements Reader {
 
     @Override
     public Optional<Record> get(byte[] key) throws IOException {
-        var currentSpan = index.get(key).flatMap(KeyTimeline::currentSpan);
+        var currentSpan = index.get(key).flatMap(KeyTimeline::liveSpan);
         if (currentSpan.isEmpty()) {
             return Optional.empty();
         }
-        var latestRevision = currentSpan.get().revision();
+        var latestRevision = currentSpan.get().lastRevision();
         var revision = encoder.encode(latestRevision);
 
         var revisionRecord = buffer.get(latestRevision);

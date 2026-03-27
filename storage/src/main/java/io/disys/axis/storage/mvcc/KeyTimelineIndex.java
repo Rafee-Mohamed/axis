@@ -16,7 +16,7 @@ public class KeyTimelineIndex {
     KeyTimeline add(byte[] key, Revision revision) {
         return index.compute(key, (_, timeline) -> {
             if (timeline == null) {
-                return new KeyTimeline(revision);
+                return KeyTimeline.init(revision);
             }
             timeline.add(revision);
             return timeline;

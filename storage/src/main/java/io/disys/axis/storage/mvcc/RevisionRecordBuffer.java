@@ -17,19 +17,6 @@ public class RevisionRecordBuffer {
         this.buffer = buffer;
     }
 
-    int size() {
-        return buffer.size();
-    }
-
-    void add(RevisionRecord record) {
-        if (!buffer.isEmpty() && record.compareTo(buffer.getLast().revision()) <= 0) {
-            throw new IllegalStateException(
-                    "RevisionRecord's revision is not after the buffer's last revision"
-            );
-        }
-        buffer.add(record);
-    }
-
     class View {
         private final int from;
         private final int to;
@@ -80,6 +67,19 @@ public class RevisionRecordBuffer {
 
 
         return new View(start, end - 1);
+    }
+
+    int size() {
+        return buffer.size();
+    }
+
+    void add(RevisionRecord record) {
+        if (!buffer.isEmpty() && record.compareTo(buffer.getLast().revision()) <= 0) {
+            throw new IllegalStateException(
+                    "RevisionRecord's revision is not after the buffer's last revision"
+            );
+        }
+        buffer.add(record);
     }
 
     // first revision record >= target

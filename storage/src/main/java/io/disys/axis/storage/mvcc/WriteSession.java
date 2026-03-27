@@ -72,7 +72,7 @@ public class WriteSession implements AutoCloseable {
         var revision = new Revision(state.lastVisibleCommitSeq() + 1, ordinal);
 
         var timeline = index.add(key, revision);
-        var span = timeline.last();
+        var span = timeline.lastSpan();
 
         var record = new Record(key, val, span);
         buffer.add(new RevisionRecord(revision, record));
@@ -88,7 +88,7 @@ public class WriteSession implements AutoCloseable {
             return false;
         }
 
-        var span = timeline.get().last();
+        var span = timeline.get().lastSpan();
         var record = new Record(key, span);
 
         buffer.add(new RevisionRecord(revision, record));
