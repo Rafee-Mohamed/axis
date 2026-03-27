@@ -26,12 +26,12 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
-    public Optional<Record> get(byte[] key) throws IOException {
+    public ReadResult get(byte[] key) throws IOException {
         return session.get(key);
     }
 
     @Override
-    public CloseableIterator<KeyVal> range(byte[] key, byte[] val) {
+    public CloseableIterator<Record> range(byte[] key, byte[] val) {
         return session.range(key, val);
     }
 

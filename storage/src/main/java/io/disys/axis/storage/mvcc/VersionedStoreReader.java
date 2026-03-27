@@ -92,10 +92,10 @@ public class VersionedStoreReader implements Reader {
 
 
     @Override
-    public Optional<Record> get(byte[] key) throws IOException {
+    public ReadResult get(byte[] key) throws IOException {
         var currentSpan = index.get(key).flatMap(KeyTimeline::liveSpan);
         if (currentSpan.isEmpty()) {
-            return Optional.empty();
+            return new ReadResult.Absent();
         }
         var latestRevision = currentSpan.get().lastRevision();
         var revision = encoder.encode(latestRevision);
@@ -104,12 +104,19 @@ public class VersionedStoreReader implements Reader {
         return revisionRecord
                 .map(RevisionRecord::record)
                 .or(() -> txn.get(db.revision(), revision)
-                .map(decoder::decodeRecord));
+                .map(decoder::decodeRecord))
+                .<ReadResult>map(ReadResult.Present::new)
+                .orElseGet(ReadResult.Absent::new);
 
     }
 
     @Override
-    public CloseableIterator<KeyVal> range(byte[] key, byte[] val) {
+    public CloseableIterator<Record> range(byte[] key, byte[] val) {
         return null;
+    }
+
+    @Override
+    public void close() throws IOException {
+        txn.close();
     }
 }

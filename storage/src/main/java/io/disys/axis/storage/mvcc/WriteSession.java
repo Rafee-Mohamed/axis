@@ -97,14 +97,16 @@ public class WriteSession implements AutoCloseable {
         return true;
     }
 
-    public Optional<Record> get(byte[] key) {
+    public ReadResult get(byte[] key) {
         var timeline = index.get(key);
         return timeline.flatMap(
                 keyTimeline -> txn.get(db.revision(), encoder.encode(keyTimeline.lastRevision()))
-                .map(decoder::decodeRecord));
+                .map(decoder::decodeRecord))
+                .<ReadResult>map(ReadResult.Present::new)
+                .orElseGet(ReadResult.Absent::new);
     }
 
-    public CloseableIterator<KeyVal> range(byte[] start, byte[] end) {
+    public CloseableIterator<Record> range(byte[] start, byte[] end) {
         return null;
     }
 
