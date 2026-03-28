@@ -1,46 +1,84 @@
 package io.disys.axis.storage.mvcc;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.Optional;
 
-// append only buffer for revision records
 public class RevisionRecordBuffer {
-    private final List<RevisionRecord> buffer;
+    private volatile RevisionRecord[] buffer;
+    private volatile int size;
+    private int staged;
 
-    RevisionRecordBuffer() {
-        this(new ArrayList<>());
+    private RevisionRecordBuffer(RevisionRecord[] buffer) {
+        this.buffer = buffer;
+        this.size = 0;
     }
 
-    RevisionRecordBuffer(List<RevisionRecord> buffer) {
-        this.buffer = buffer;
+    static RevisionRecordBuffer allocate(int capacity) {
+        if (capacity <= 0) {
+            throw new IllegalArgumentException("capacity must be positive");
+        }
+        return new RevisionRecordBuffer(new RevisionRecord[capacity]);
+    }
+
+    void stage(RevisionRecord record) {
+        checkForStage(record);
+        resize();
+        buffer[size + staged] = record;
+        staged++;
+    }
+
+    void publish() {
+        size += staged;
+        staged = 0;
+    }
+
+    int size() {
+        return size;
+    }
+
+    private void checkForStage(RevisionRecord record) {
+        var n = size + staged;
+        if (n > 0 && record.compareTo(buffer[n - 1].revision()) <= 0) {
+            throw new IllegalStateException(
+                    "RevisionRecord's revision is not after the buffer's last revision");
+        }
+    }
+
+    void resize() {
+        if ((size + staged) < buffer.length) {
+            return;
+        }
+
+        var newBuffer = new RevisionRecord[buffer.length * 2];
+        System.arraycopy(buffer, 0, newBuffer, 0, buffer.length);
+        buffer = newBuffer;
     }
 
     class View {
         private final int from;
         private final int to;
+        private final RevisionRecord[] buffer;
 
         // from and to inclusive
-        View(int from, int to) {
+        View(RevisionRecord[] buffer, int from, int to) {
             this.from = from;
             this.to = to;
+            this.buffer = buffer;
         }
 
         boolean isEmpty() {
             return from < 0 || to < from;
         }
 
-
         Optional<RevisionRecord> get(Revision target) {
-            if (isEmpty()) return Optional.empty();
-            return RevisionRecordBuffer.this.get(target, from, to);
+            if (isEmpty()) {
+                return Optional.empty();
+            }
+            return RevisionRecordBuffer.this.get(buffer, target, from, to);
         }
-
     }
 
     View emptyView() {
-        return new View(-1, -1);
+        return new View(null, -1, -1);
     }
 
     View view(long startSeq, long endSeq) {
@@ -48,52 +86,35 @@ public class RevisionRecordBuffer {
             throw new IllegalArgumentException("startSeq can't be greater than end Seq");
         }
 
-        // if startSeq after last revision or endSeq is before first revision
-        // then empty buffer
-        if (
-                buffer.isEmpty() ||
-                buffer.getLast().revision().compareTo(startSeq) < 0 ||
-                buffer.getFirst().revision().compareTo(endSeq) > 0
-        ) {
+        // first pinning size - size change reflects only after buffer filled to that size
+        var pinnedSize = size;
+        // buffer is guaranteed to filled up to pinned size
+        var pinnedBuffer = buffer;
+
+        if (pinnedSize == 0) {
             return emptyView();
         }
 
-
-        var start = lowerBound(new Revision(startSeq, 0));
-
-
-        // need the endSeq up to its last ordinal so search for its next seq
-        var end = lowerBound(new Revision(endSeq + 1, 0));
-
-
-        return new View(start, end - 1);
-    }
-
-    int size() {
-        return buffer.size();
-    }
-
-    void add(RevisionRecord record) {
-        if (!buffer.isEmpty() && record.compareTo(buffer.getLast().revision()) <= 0) {
-            throw new IllegalStateException(
-                    "RevisionRecord's revision is not after the buffer's last revision"
-            );
+        // if startSeq after last revision or endSeq is before first revision
+        // then empty buffer
+        if (pinnedBuffer[pinnedSize - 1].revision().compareTo(startSeq) < 0
+                || pinnedBuffer[0].revision().compareTo(endSeq) > 0) {
+            return emptyView();
         }
-        buffer.add(record);
+
+        var start = lowerBound(pinnedBuffer, new Revision(startSeq, 0), 0, pinnedSize - 1);
+        // need the endSeq up to its last ordinal so search for its next seq
+        var end = lowerBound(pinnedBuffer, new Revision(endSeq + 1, 0), 0, pinnedSize - 1);
+
+        return new View(pinnedBuffer, start, end - 1);
     }
 
-    // first revision record >= target
-    int lowerBound(Revision target) {
-        return lowerBound(target, 0, buffer.size() - 1);
-    }
-
-    // first revision record >= target
-    int lowerBound(Revision target, int left, int right) {
+    private int lowerBound(RevisionRecord[] buffer, Revision target, int left, int right) {
 
         while (left <= right) {
             var mid = left + (right - left) / 2;
 
-            if (buffer.get(mid).compareTo(target) >= 0) {
+            if (buffer[mid].compareTo(target) >= 0) {
                 right = mid - 1;
             } else {
                 left = mid + 1;
@@ -103,22 +124,17 @@ public class RevisionRecordBuffer {
         return left;
     }
 
-    int search(Revision target) {
-        return search(target, 0, buffer.size() - 1);
-    }
-
-
-    int search(Revision target, int left, int right) {
+    private int search(RevisionRecord[] buffer, Revision target, int left, int right) {
         while (left <= right) {
             var mid = left + (right - left) / 2;
-            var cmp = buffer.get(mid).compareTo(target);
+            var cmp = buffer[mid].compareTo(target);
 
             if (cmp == 0) {
                 return mid;
             }
 
             if (cmp > 0) {
-                right = mid -1;
+                right = mid - 1;
             } else {
                 left = mid + 1;
             }
@@ -127,14 +143,8 @@ public class RevisionRecordBuffer {
         return -1;
     }
 
-    Optional<RevisionRecord> get(Revision revision) {
-        return get(revision, 0, buffer.size() - 1);
+    private Optional<RevisionRecord> get(RevisionRecord[] buffer, Revision revision, int left, int right) {
+        var idx = search(buffer, revision, left, right);
+        return idx >= 0 ? Optional.of(buffer[idx]) : Optional.empty();
     }
-
-    Optional<RevisionRecord> get(Revision revision, int left, int right) {
-        var idx = search(revision, left, right);
-        return idx >= 0 ? Optional.of(buffer.get(idx)) : Optional.empty();
-    }
-
-
 }

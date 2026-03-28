@@ -75,7 +75,7 @@ public class WriteSession implements AutoCloseable {
         var span = timeline.lastSpan();
 
         var record = new Record(key, val, span);
-        buffer.add(new RevisionRecord(revision, record));
+        buffer.stage(new RevisionRecord(revision, record));
 
         txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
     }
@@ -91,7 +91,7 @@ public class WriteSession implements AutoCloseable {
         var span = timeline.get().lastSpan();
         var record = new Record(key, span);
 
-        buffer.add(new RevisionRecord(revision, record));
+        buffer.stage(new RevisionRecord(revision, record));
         txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
 
         return true;

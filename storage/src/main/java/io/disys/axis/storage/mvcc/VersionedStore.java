@@ -24,7 +24,7 @@ public class VersionedStore {
         this.backend = backend;
         this.config = config;
         this.index = new KeyTimelineIndex();
-        this.buffer = new RevisionRecordBuffer();
+        this.buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
         this.encoder = new RecordEncoder();
         this.decoder = new RecordDecoder();
         var metaDb = new MetaDb(config.metaDB(), config.persistedCommitSeq().getBytes(), config.firstCommitSeq().getBytes());
@@ -60,6 +60,10 @@ public class VersionedStore {
     // multiple readers allowed, can called by multiple threads to get readers
     public Reader reader() {
         return VersionedStoreReader.create(db, index, backend.beginRead(), buffer, encoder, decoder, state);
+    }
+
+    public void renewBuffer() {
+        buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
     }
 
 
@@ -105,7 +109,7 @@ public class VersionedStore {
         // guaranteed, this is snapshot isolation that the reader has
 
         // buffer ref swap
-        buffer = new RevisionRecordBuffer();
+        renewBuffer();
         // ----- On creating new Reader, during this interleaving
         // Same as the interleaving before, but the buffer will ge empty but index can
         // have the data - buffer and index swap is not atomic, but that's not the issue
@@ -131,7 +135,7 @@ public class VersionedStore {
 
     public void sync() throws IOException {
         session.close();
-        buffer = new RevisionRecordBuffer();
+        renewBuffer();
         session = new WriteSession(config, db, backend.beginWrite(), index, buffer, state, encoder, decoder);
     }
 
@@ -148,7 +152,7 @@ public class VersionedStore {
             // for the reader to merge the results, so there is a possibility that
             // records can be present in backend but can hold old buffer
             // so two views of same data, while reading keep this in mind
-            buffer = new RevisionRecordBuffer();
+            renewBuffer();
             session = new WriteSession(config, db, backend.beginWrite(), index, buffer, state, encoder, decoder);
         }
         return new VersionedStoreWriter(session);
