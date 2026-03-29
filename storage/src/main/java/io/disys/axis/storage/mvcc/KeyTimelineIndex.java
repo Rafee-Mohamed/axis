@@ -13,6 +13,11 @@ public class KeyTimelineIndex {
         return Optional.ofNullable(index.get(key));
     }
 
+    Optional<KeyTimelineView> pin(byte[] key, long firstCommitSeq, long lastCommitSeq) {
+        return Optional.ofNullable(index.get(key))
+                .flatMap(t -> t.pin(firstCommitSeq, lastCommitSeq));
+    }
+
     KeyTimeline add(byte[] key, Revision revision) {
         return index.compute(key, (_, timeline) -> {
             if (timeline == null) {

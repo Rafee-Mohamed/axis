@@ -26,6 +26,12 @@ public class LiveSpan implements KeySpan {
     static LiveSpan create(VolatileList<Revision> revisions, int position, long createdAt, int version) {
         return new LiveSpan(revisions, position, createdAt, version);
     }
+
+    int position() { return position; }
+
+    VolatileList<Revision>.PinnedView pin() {
+        return revisions.pin();
+    }
     
     // create and update revision
     void add(Revision revision) {
@@ -76,14 +82,6 @@ public class LiveSpan implements KeySpan {
         var nextDeadSpan = revisions.toList();
         nextDeadSpan.add(deleteRevision);
         return DeadSpan.create(nextDeadSpan, createdAt, version);
-    }
-
-    void release() {
-        revisions.release();
-    }
-
-    void acquire() {
-        var _ = revisions.acquire();
     }
 
     int lowerBound(long commitSeq) {

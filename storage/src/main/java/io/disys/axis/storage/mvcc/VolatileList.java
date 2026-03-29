@@ -29,6 +29,10 @@ public class VolatileList<T> {
             this.size = size;
         }
 
+        boolean isEmpty() {
+            return size == 0;
+        }
+
         int size() {
             return size;
         }
