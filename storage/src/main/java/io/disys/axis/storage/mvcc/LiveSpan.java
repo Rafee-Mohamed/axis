@@ -3,7 +3,7 @@ package io.disys.axis.storage.mvcc;
 import java.util.ArrayList;
 import java.util.Optional;
 
-public record LiveSpan(int position, VolatileList<Revision> revisions) implements KeySpanView {
+public record LiveSpan(int position, VolatileList<Revision> revisions) implements KeySpan {
 
     static LiveSpan init(Revision revision) {
         return new LiveSpan(0, VolatileList.of(revision));

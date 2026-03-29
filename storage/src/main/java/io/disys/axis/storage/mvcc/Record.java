@@ -9,10 +9,10 @@ public record Record(
         long modifiedAtSeq
 ) {
     Record(byte[] key, byte[] val, KeySpan span) {
-        this(key, val, false, span.version(), span.createdAtSeq(), span.modifiedAtSeq());
+        this(key, val, false, span.lastVersion(), span.createdAtSeq(), span.modifiedAtSeq());
     }
 
     Record(byte[] key, KeySpan span) {
-        this(key, new byte[0], true, span.version(), span.createdAtSeq(), span.modifiedAtSeq());
+        this(key, new byte[0], true, span.lastVersion(), span.createdAtSeq(), span.modifiedAtSeq());
     }
 }

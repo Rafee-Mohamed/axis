@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-public record DeadSpan(List<Revision> revisions) implements KeySpanView {
+public record DeadSpan(List<Revision> revisions) implements KeySpan {
 
     static DeadSpan create(List<Revision> revisions) {
         if (revisions.size() < 2) {
