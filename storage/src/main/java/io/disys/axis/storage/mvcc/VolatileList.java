@@ -144,6 +144,14 @@ public class VolatileList<T> {
         return get(size - 1);
     }
 
+    T getLogicalLast() {
+        var n = size + staged;
+        if (n == 0) {
+            return null;
+        }
+        return list[n - 1];
+    }
+
 
     private void resize() {
         var n = size + staged;
