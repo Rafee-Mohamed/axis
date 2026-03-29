@@ -31,8 +31,18 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
+    public ReadResult getAt(byte[] key, long commitSeq) throws IOException {
+        return session.getAt(key, commitSeq);
+    }
+
+    @Override
     public CloseableIterator<Record> range(byte[] key, byte[] val) {
         return session.range(key, val);
+    }
+
+    @Override
+    public CloseableIterator<Record> rangeAt(byte[] startKey, byte[] endKey, long commitSeq) {
+        return session.rangeAt(startKey, endKey, commitSeq);
     }
 
     @Override

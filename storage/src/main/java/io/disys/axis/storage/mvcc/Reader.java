@@ -7,7 +7,9 @@ import java.util.Optional;
 
 public interface Reader extends AutoCloseable {
     ReadResult get(byte[] key) throws IOException;
+    ReadResult getAt(byte[] key, long commitSeq) throws IOException;
     CloseableIterator<Record> range(byte[] startKey, byte[] endKey);
+    CloseableIterator<Record> rangeAt(byte[] startKey, byte[] endKey, long commitSeq);
     @Override
     void close() throws IOException;
 }

@@ -71,11 +71,11 @@ public class VersionedStoreReader implements Reader {
             RevisionRecordBuffer buffer,
             RecordEncoder encoder,
             RecordDecoder decoder,
-            StoreState state
+            CommitSeqBound bound
     ) {
         var firstCommitSeq = getCommitSeq(txn, db.meta(), db.meta().firstCommitSeqKey());
         var persistedCommitSeq = getCommitSeq(txn, db.meta(), db.meta().persistedCommitSeqKey());
-        var lastCommitSeq = state.lastVisibleCommitSeq();
+        var lastCommitSeq = bound.end();
         return new VersionedStoreReader(
                 db,
                 index,
@@ -88,8 +88,6 @@ public class VersionedStoreReader implements Reader {
                 lastCommitSeq
         );
     }
-
-
 
     @Override
     public ReadResult get(byte[] key) throws IOException {
@@ -107,11 +105,37 @@ public class VersionedStoreReader implements Reader {
                 .map(decoder::decodeRecord))
                 .<ReadResult>map(ReadResult.Present::new)
                 .orElseGet(ReadResult.Absent::new);
+    }
 
+    private boolean compacted(long commitSeq) {
+        return commitSeq < firstCommitSeq;
+    }
+
+    private boolean future(long commitSeq) {
+        return commitSeq > lastCommitSeq;
+    }
+
+    @Override
+    public ReadResult getAt(byte[] key, long commitSeq) throws IOException {
+        if (compacted(commitSeq)) {
+            return new ReadResult.Compacted(firstCommitSeq, commitSeq);
+        }
+
+        if (future(commitSeq)) {
+            return new ReadResult.Future(lastCommitSeq, commitSeq);
+        }
+
+
+        return null;
     }
 
     @Override
     public CloseableIterator<Record> range(byte[] key, byte[] val) {
+        return null;
+    }
+
+    @Override
+    public CloseableIterator<Record> rangeAt(byte[] startKey, byte[] endKey, long commitSeq) {
         return null;
     }
 

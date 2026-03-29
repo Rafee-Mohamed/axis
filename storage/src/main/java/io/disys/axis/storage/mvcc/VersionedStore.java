@@ -10,15 +10,18 @@ public class VersionedStore {
     private volatile KeyTimelineIndex index;
     private final Backend backend;
     private volatile RevisionRecordBuffer buffer;
-    private final StoreState state;
+    private final CommitSeqBound bound;
     private final VersionedStoreConfig config;
     private final RecordEncoder encoder;
     private final RecordDecoder decoder;
     private final Db db;
     private WriteSession session;
 
-    record Db(Database revision, MetaDb meta) {}
-    record MetaDb(String name, byte[] persistedCommitSeqKey, byte[] firstCommitSeqKey) implements Database {}
+    record Db(Database revision, MetaDb meta) {
+    }
+
+    record MetaDb(String name, byte[] persistedCommitSeqKey, byte[] firstCommitSeqKey) implements Database {
+    }
 
     VersionedStore(Backend backend, VersionedStoreConfig config) throws Exception {
         this.backend = backend;
@@ -27,18 +30,18 @@ public class VersionedStore {
         this.buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
         this.encoder = new RecordEncoder();
         this.decoder = new RecordDecoder();
-        var metaDb = new MetaDb(config.metaDB(), config.persistedCommitSeq().getBytes(), config.firstCommitSeq().getBytes());
+        var metaDb = new MetaDb(config.metaDB(), config.persistedCommitSeq().getBytes(),
+                config.firstCommitSeq().getBytes());
         this.db = new Db(Database.of(config.versionDB()), metaDb);
-        this.state = getState(backend, metaDb);
-        this.session = new WriteSession(config, db, backend.beginWrite(), index, buffer, state, encoder, decoder);
+        this.bound = getState(backend, metaDb);
+        this.session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
     }
 
     public static VersionedStore restore(Backend backend, VersionedStoreConfig config) throws Exception {
         return new VersionedStore(backend, config);
     }
 
-
-    private static StoreState getState(Backend backend, MetaDb db) throws Exception {
+    private static CommitSeqBound getState(Backend backend, MetaDb db) throws Exception {
         try (var readTxn = backend.beginRead()) {
             var lastPersistedCommitSeq = readTxn.get(db, db.persistedCommitSeqKey())
                     .map(ByteBuffer::wrap)
@@ -50,28 +53,26 @@ public class VersionedStore {
                     .map(ByteBuffer::getLong)
                     .orElse(0L);
 
-            return new StoreState(lastPersistedCommitSeq, firstVisibleCommitSeq);
+            return new CommitSeqBound(firstVisibleCommitSeq, lastPersistedCommitSeq);
         }
     }
-
 
     // Multi thread access
 
     // multiple readers allowed, can called by multiple threads to get readers
     public Reader reader() {
-        return VersionedStoreReader.create(db, index, backend.beginRead(), buffer, encoder, decoder, state);
+        return VersionedStoreReader.create(db, index, backend.beginRead(), buffer, encoder, decoder, bound);
     }
 
     public void renewBuffer() {
         buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
     }
 
-
     // Only single thread access for writer/compact/sync
 
     // Behaviour of concurrent threads accessing these are undefined
     public void compact(long commitSeq) throws IOException {
-        if (state.firstVisibleCommitSeq() >= commitSeq) {
+        if (bound.start() >= commitSeq) {
             return;
         }
         // add the compaction point
@@ -130,13 +131,13 @@ public class VersionedStore {
         // on visibility of revisions before that compaction point
 
         // from now on new writes on in this session with new buffer and new index
-        session = new WriteSession(config, db, backend.beginWrite(), index, buffer, state, encoder, decoder);
+        session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
     }
 
     public void sync() throws IOException {
         session.close();
         renewBuffer();
-        session = new WriteSession(config, db, backend.beginWrite(), index, buffer, state, encoder, decoder);
+        session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
     }
 
     public Writer writer() throws IOException {
@@ -153,7 +154,7 @@ public class VersionedStore {
             // records can be present in backend but can hold old buffer
             // so two views of same data, while reading keep this in mind
             renewBuffer();
-            session = new WriteSession(config, db, backend.beginWrite(), index, buffer, state, encoder, decoder);
+            session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
         }
         return new VersionedStoreWriter(session);
     }

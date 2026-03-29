@@ -11,7 +11,7 @@ public class WriteSession implements AutoCloseable {
     private final WriteTxn txn;
     private final KeyTimelineIndex index;
     private final RevisionRecordBuffer buffer;
-    private final StoreState state;
+    private final CommitSeqBound bound;
     private final VersionedStoreConfig config;
     private final RecordEncoder encoder;
     private final RecordDecoder decoder;
@@ -24,15 +24,14 @@ public class WriteSession implements AutoCloseable {
             WriteTxn txn,
             KeyTimelineIndex index,
             RevisionRecordBuffer buffer,
-            StoreState state,
+            CommitSeqBound bound,
             RecordEncoder encoder,
-            RecordDecoder decoder
-    ) {
+            RecordDecoder decoder) {
         this.config = config;
         this.txn = txn;
         this.index = index;
         this.buffer = buffer;
-        this.state = state;
+        this.bound = bound;
         this.encoder = encoder;
         this.decoder = decoder;
         this.db = db;
@@ -53,22 +52,18 @@ public class WriteSession implements AutoCloseable {
         return false;
     }
 
-
-
     @Override
     public void close() throws IOException {
         txn.put(
                 db.meta(),
                 db.meta().persistedCommitSeqKey(),
-                ByteBuffer.allocate(Long.BYTES).putLong(state.lastVisibleCommitSeq()).array()
-        );
+                ByteBuffer.allocate(Long.BYTES).putLong(bound.end()).array());
         txn.commit();
         txn.close();
     }
 
-
     void put(byte[] key, byte[] val, int ordinal) throws IOException {
-        var revision = new Revision(state.lastVisibleCommitSeq() + 1, ordinal);
+        var revision = new Revision(bound.end() + 1, ordinal);
 
         var timeline = index.add(key, revision);
         var span = timeline.lastSpan();
@@ -80,7 +75,7 @@ public class WriteSession implements AutoCloseable {
     }
 
     boolean delete(byte[] key, int ordinal) throws IOException {
-        var revision = new Revision(state.lastVisibleCommitSeq() + 1, ordinal);
+        var revision = new Revision(bound.end() + 1, ordinal);
         var timeline = index.complete(key, revision);
 
         if (timeline.isEmpty()) {
@@ -100,9 +95,13 @@ public class WriteSession implements AutoCloseable {
         var timeline = index.get(key);
         return timeline.flatMap(
                 keyTimeline -> txn.get(db.revision(), encoder.encode(keyTimeline.lastRevision()))
-                .map(decoder::decodeRecord))
+                        .map(decoder::decodeRecord))
                 .<ReadResult>map(ReadResult.Present::new)
                 .orElseGet(ReadResult.Absent::new);
+    }
+
+    public ReadResult getAt(byte[] key, long commitSeq) throws IOException {
+        return null;
     }
 
     public CloseableIterator<Record> range(byte[] start, byte[] end) {
@@ -111,7 +110,7 @@ public class WriteSession implements AutoCloseable {
 
     public void advance() throws IOException {
         buffer.publish();
-        state.advanceCommitSeq();
+        bound.advance();
     }
 
     public void compact(long commitSeq) {
@@ -120,22 +119,11 @@ public class WriteSession implements AutoCloseable {
                 db.meta().firstCommitSeqKey(),
                 ByteBuffer.allocate(Long.BYTES)
                         .putLong(commitSeq)
-                        .array()
-        );
-        state.compactCommitSeq(commitSeq);
+                        .array());
+        bound.compact(commitSeq);
+    }
+
+    public CloseableIterator<Record> rangeAt(byte[] startKey, byte[] endKey, long commitSeq) {
+        return null;
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
