@@ -3,9 +3,9 @@ package io.disys.axis.storage.mvcc;
 import java.util.Optional;
 
 public class ArrayKeyTimeline {
-    private volatile Revision[][] deadSpans;
+    private Revision[][] deadSpans;
     private volatile int deadSpanCount;
-    private volatile Revision[] liveSpan;
+    private Revision[] liveSpan;
     private volatile int liveRevisionCount;
 
     private ArrayKeyTimeline(Revision[][] deadSpans, int deadSpanCount, Revision[] liveSpan, int liveRevisionCount) {
