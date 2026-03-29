@@ -7,13 +7,20 @@ import java.util.Optional;
 public class KeySpan {
     private final List<Revision> revisions;
 
-    KeySpan(List<Revision> revisions) {
+    private KeySpan(List<Revision> revisions) {
         this.revisions = revisions;
     }
 
     static KeySpan init(Revision createRevision) {
         var revisions = new ArrayList<Revision>();
         revisions.add(createRevision);
+        return new KeySpan(revisions);
+    }
+
+    static KeySpan dead(List<Revision> revisions) {
+        if (revisions.size() < 2) {
+            throw new IllegalStateException("Dead span should have at lease 2 revisions - create and delete");
+        }
         return new KeySpan(revisions);
     }
 
@@ -58,7 +65,11 @@ public class KeySpan {
     Optional<KeySpan> compact(long commitSeq) {
         var lb = lowerBound(commitSeq);
 
-        if (lb < 0 || lb >= revisions.size()) {
+        if (lb <= 0) {
+            return Optional.of(this);
+        }
+
+        if (lb >= revisions.size()) {
             return Optional.empty();
         }
 
