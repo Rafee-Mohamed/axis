@@ -43,6 +43,7 @@ public final class RevisionRecordBuffer {
         private final int from;
         private final int to;
 
+        // from and to both are inclusive
         private View(VolatileList<RevisionRecord>.PinnedView pin, int from, int to) {
             this.pin = pin;
             this.from = from;
@@ -57,7 +58,7 @@ public final class RevisionRecordBuffer {
             if (isEmpty()) {
                 return Optional.empty();
             }
-            int idx = search(pin, target);
+            int idx = search(pin, target, from, to);
             return idx >= 0 ? Optional.of(pin.get(idx)) : Optional.empty();
         }
     }
@@ -108,12 +109,10 @@ public final class RevisionRecordBuffer {
 
     private static int search(
             VolatileList<RevisionRecord>.PinnedView pin,
-            Revision target
+            Revision target,
+            int left,
+            int right
     ) {
-
-        var left = 0;
-        var right = pin.size() - 1;
-
         while (left <= right) {
             int mid = left + (right - left) / 2;
             int cmp = pin.get(mid).compareTo(target);
@@ -128,4 +127,5 @@ public final class RevisionRecordBuffer {
         }
         return -1;
     }
+
 }
