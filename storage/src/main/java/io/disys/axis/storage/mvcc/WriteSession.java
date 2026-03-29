@@ -5,7 +5,6 @@ import io.disys.axis.storage.backend.WriteTxn;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 public class WriteSession implements AutoCloseable {
@@ -14,10 +13,10 @@ public class WriteSession implements AutoCloseable {
     private final RevisionRecordBuffer buffer;
     private final StoreState state;
     private final VersionedStoreConfig config;
-    private final long expiryTime;
     private final RecordEncoder encoder;
     private final RecordDecoder decoder;
     private final VersionedStore.Db db;
+    private final long expiryTime;
 
     WriteSession(
             VersionedStoreConfig config,

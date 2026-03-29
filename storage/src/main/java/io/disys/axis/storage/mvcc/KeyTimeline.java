@@ -23,7 +23,7 @@ public class KeyTimeline {
     }
 
     static KeyTimeline fromDeadSpans(VolatileList<DeadSpan> deadSpans) {
-        return new KeyTimeline(deadSpans, new LiveSpan(deadSpans.size(), VolatileList.allocate(10)));
+        return new KeyTimeline(deadSpans, LiveSpan.empty(deadSpans.size()));
     }
 
     static KeyTimeline fromTimeline(VolatileList<DeadSpan> deadSpans, LiveSpan liveSpan) {
@@ -35,7 +35,7 @@ public class KeyTimeline {
     }
 
     void complete(Revision revision) {
-        if (liveSpan.revisions().isEmpty()) {
+        if (liveSpan.isEmpty()) {
             throw new IllegalStateException("No alive span to complete");
         }
         
@@ -44,7 +44,7 @@ public class KeyTimeline {
         deadSpans.add(nextDeadSpan);
         // read on this interleaving would result in two same spans
         // present in both live and last dead span
-        liveSpan = new LiveSpan(deadSpans.size(), VolatileList.allocate(10));
+        liveSpan = LiveSpan.empty(deadSpans.size());
         // to refresh the live span ref
         liveSpan.release();
     }

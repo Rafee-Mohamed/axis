@@ -7,5 +7,5 @@ public interface KeySpan {
     Revision lastRevision();
     Revision firstRevision();
 
-    int lastVersion();
+    int version();
 }

@@ -1,21 +1,44 @@
 package io.disys.axis.storage.mvcc;
 
-import java.util.ArrayList;
 import java.util.Optional;
 
-public record LiveSpan(int position, VolatileList<Revision> revisions) implements KeySpan {
+public class LiveSpan implements KeySpan {
+    private final VolatileList<Revision> revisions; 
+    private final int position; 
+    private long createdAt; 
+    private int version;
+    
+    LiveSpan(VolatileList<Revision> revisions, int position, long createdAt, int version) {
+        this.revisions = revisions;
+        this.position = position;
+        this.createdAt = createdAt;
+        this.version = version;
+    }
 
     static LiveSpan init(Revision revision) {
-        return new LiveSpan(0, VolatileList.of(revision));
+        return new LiveSpan(VolatileList.of(revision), 0, revision.commitSeq(), 0);
     }
+
+    static LiveSpan empty(int position) {
+        return new LiveSpan(VolatileList.allocate(10), position, -1, -1);
+    }
+
+    static LiveSpan create(VolatileList<Revision> revisions, int position, long createdAt, int version) {
+        return new LiveSpan(revisions, position, createdAt, version);
+    }
+    
     // create and update revision
     void add(Revision revision) {
+        if (isEmpty()) {
+            createdAt = revision.commitSeq();
+        }
+        version += 1;
         revisions.add(revision);
     }
 
     @Override
     public long createdAtSeq() {
-        return revisions.getFirst().commitSeq();
+        return createdAt;
     }
 
     @Override
@@ -38,8 +61,8 @@ public record LiveSpan(int position, VolatileList<Revision> revisions) implement
     }
 
     @Override
-    public int lastVersion() {
-        return revisions.size() - 1;
+    public int version() {
+        return version;
     }
 
     Revision get(int idx) {
@@ -51,7 +74,7 @@ public record LiveSpan(int position, VolatileList<Revision> revisions) implement
     DeadSpan complete(Revision deleteRevision) {
         var nextDeadSpan = revisions.toList();
         nextDeadSpan.add(deleteRevision);
-        return DeadSpan.create(nextDeadSpan);
+        return DeadSpan.create(nextDeadSpan, createdAt, version);
     }
 
     void release() {
@@ -91,8 +114,8 @@ public record LiveSpan(int position, VolatileList<Revision> revisions) implement
             return Optional.empty();
         }
 
-        var compacted = revisions().copy(lb);;
+        var compacted = revisions.copy(lb);;
 
-        return Optional.of(new LiveSpan(position, compacted));
+        return Optional.of(new LiveSpan(compacted, position, createdAt, version));
     }
 }
