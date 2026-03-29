@@ -1,75 +1,33 @@
 package io.disys.axis.storage.mvcc;
 
-
 import java.util.Optional;
 
 public class VolatileListKeyTimeline {
-    private final VolatileList<KeySpan> deadSpans;
+    private final VolatileList<DeadSpan> deadSpans;
     private LiveSpan liveSpan;
-
-    // live span can be empty
-    record LiveSpan(int position, VolatileList<Revision> revisions) {
-
-        // create and update revision
-        void add(Revision revision) {
-            revisions.add(revision);
-        }
-
-        boolean isEmpty() {
-            return revisions.isEmpty();
-        }
-
-        Revision firstRevision() {
-            return revisions.getFirst();
-        }
-
-        Revision lastRevision() {
-            return revisions.getLast();
-        }
-
-        Revision get(int idx) {
-            return revisions.get(idx);
-        }
-
-        int size() { return revisions.size(); }
-
-        KeySpan complete(Revision deleteRevision) {
-            var nextDeadSpan = revisions.toList();
-            nextDeadSpan.add(deleteRevision);
-            return KeySpan.dead(nextDeadSpan);
-        }
-
-        void release() {
-            revisions.release();
-        }
-
-        void acquire() {
-            var _ = revisions.acquire();
-        }
-    }
-
-    private VolatileListKeyTimeline(VolatileList<KeySpan> deadSpans, VolatileList<Revision> liveSpan) {
+    
+    private VolatileListKeyTimeline(VolatileList<DeadSpan> deadSpans, LiveSpan liveSpan) {
         this.deadSpans = deadSpans;
-        this.liveSpan = new LiveSpan(deadSpans.size(), liveSpan);
+        this.liveSpan = liveSpan;
     }
 
     static VolatileListKeyTimeline init(Revision revision) {
         return new VolatileListKeyTimeline(
                 VolatileList.allocate(10),
-                VolatileList.of(revision)
+                LiveSpan.init(revision)
         );
     }
 
-    static VolatileListKeyTimeline fromLiveSpan(VolatileList<Revision> revisions) {
-        return new VolatileListKeyTimeline(VolatileList.allocate(10), revisions);
+    static VolatileListKeyTimeline fromLiveSpan(LiveSpan liveSpan) {
+        return new VolatileListKeyTimeline(VolatileList.allocate(10), liveSpan);
     }
 
-    static VolatileListKeyTimeline fromDeadSpans(VolatileList<KeySpan> deadSpans) {
-        return new VolatileListKeyTimeline(deadSpans, VolatileList.allocate(10));
+    static VolatileListKeyTimeline fromDeadSpans(VolatileList<DeadSpan> deadSpans) {
+        return new VolatileListKeyTimeline(deadSpans, new LiveSpan(deadSpans.size(), VolatileList.allocate(10)));
     }
 
-    static VolatileListKeyTimeline fromTimeline(VolatileList<KeySpan> deadSpans, VolatileList<Revision> revisions) {
-        return new VolatileListKeyTimeline(deadSpans, revisions);
+    static VolatileListKeyTimeline fromTimeline(VolatileList<DeadSpan> deadSpans, LiveSpan liveSpan) {
+        return new VolatileListKeyTimeline(deadSpans, liveSpan);
     }
 
     void add(Revision revision) {
@@ -99,8 +57,9 @@ public class VolatileListKeyTimeline {
         return deadSpans.isEmpty() ? liveSpan.lastRevision() : deadSpans.getLast().lastRevision();
     }
 
-
-
+    Optional<KeySpanView> liveSpan() {
+        return liveSpan.isEmpty() ? Optional.empty() : Optional.of(liveSpan);
+    }
 
     private int lowerBoundDead(long commitSeq) {
         int n = deadSpans.size();
@@ -144,19 +103,8 @@ public class VolatileListKeyTimeline {
         if (liveSpan.isEmpty()) {
             throw new IllegalStateException("Timeline can't exist without a revision on live span if compacted");
         }
-        int lb = lowerBoundLive(commitSeq);
-        int size = liveSpan.size();
-        if (lb >= size) {
-            return Optional.empty();
-        }
-        if (lb == 0) {
-            return Optional.of(this);
-        }
-        var newLive = liveSpan.revisions.copy(lb);
-        return Optional.of(fromLiveSpan(newLive));
+        return liveSpan.compact(commitSeq).map(VolatileListKeyTimeline::fromLiveSpan);
     }
-
-
 
     public Optional<VolatileListKeyTimeline> compact(long commitSeq) {
         if (commitSeq < firstRevision().commitSeq()) {
@@ -172,10 +120,10 @@ public class VolatileListKeyTimeline {
         }
 
         // uncompactedDeadSpans logical size == newDeadCount == (deadCount - spanIdx)
-        var uncompactedDeadSpans = VolatileList.<KeySpan>allocate(deadCount);
+        var uncompactedDeadSpans = VolatileList.<DeadSpan>allocate(deadCount);
 
-        KeySpan span = deadSpans.get(spanIdx);
-        KeySpan compactedRow = span.compact(commitSeq).orElseThrow(
+        var span = deadSpans.get(spanIdx);
+        var compactedRow = span.compact(commitSeq).orElseThrow(
                 () -> new IllegalStateException("Compact dead shouldn't be empty"));
         spanIdx++;
 
@@ -190,10 +138,6 @@ public class VolatileListKeyTimeline {
         if (liveSpan.isEmpty()) {
             return Optional.of(fromDeadSpans(uncompactedDeadSpans));
         }
-        return Optional.of(fromTimeline(uncompactedDeadSpans, liveSpan.revisions()));
+        return Optional.of(fromTimeline(uncompactedDeadSpans, liveSpan));
     }
 }
-
-
-
-
