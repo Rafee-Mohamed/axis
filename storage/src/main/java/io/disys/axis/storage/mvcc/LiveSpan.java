@@ -20,7 +20,7 @@ public class LiveSpan implements KeySpan {
     }
 
     static LiveSpan empty(int position) {
-        return new LiveSpan(VolatileList.allocate(10), position, -1, -1);
+        return new LiveSpan(VolatileList.allocate(10), position, -1, 0);
     }
 
     static LiveSpan create(VolatileList<Revision> revisions, int position, long createdAt, int version) {
@@ -32,7 +32,7 @@ public class LiveSpan implements KeySpan {
         if (isEmpty()) {
             createdAt = revision.commitSeq();
         }
-        version += 1;
+        version++;
         revisions.add(revision);
     }
 
@@ -72,6 +72,7 @@ public class LiveSpan implements KeySpan {
     int size() { return revisions.size(); }
 
     DeadSpan complete(Revision deleteRevision) {
+        version++;
         var nextDeadSpan = revisions.toList();
         nextDeadSpan.add(deleteRevision);
         return DeadSpan.create(nextDeadSpan, createdAt, version);
