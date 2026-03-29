@@ -111,6 +111,7 @@ public class WriteSession implements AutoCloseable {
     }
 
     public void advance() throws IOException {
+        buffer.publish();
         state.advanceCommitSeq();
     }
 
