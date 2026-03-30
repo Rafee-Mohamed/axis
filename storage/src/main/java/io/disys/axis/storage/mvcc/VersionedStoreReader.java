@@ -97,21 +97,26 @@ public class VersionedStoreReader implements Reader {
         return index.pin(key, firstCommitSeq, lastCommitSeq);
     }
 
-    private ReadResult get(Revision revision) {
+    private ReadResult get(byte[] key, Revision revision) throws InconsistentStoreException.MissingRecordForRevision {
         return buffer.get(revision)
                 .map(RevisionRecord::record)
                 .or(() -> txn.get(db.revision(), encoder.encode(revision))
                         .map(decoder::decodeRecord))
                 .<ReadResult>map(ReadResult.Present::new)
-                .orElseGet(ReadResult.Absent::new);
+                .orElseThrow(() ->
+                        new InconsistentStoreException.MissingRecordForRevision(key, revision, firstCommitSeq, lastCommitSeq));
     }
 
     @Override
-    public ReadResult get(byte[] key) throws IOException {
-        return timeline(key)
-                .flatMap(KeyTimelineView::floor)
-                .map(this::get)
-                .orElseGet(ReadResult.Absent::new);
+    public ReadResult get(byte[] key) throws IOException, InconsistentStoreException.MissingRecordForRevision {
+        var revision = timeline(key)
+                .flatMap(KeyTimelineView::floor);
+
+        if (revision.isEmpty()) {
+            return new ReadResult.Absent();
+        }
+
+        return get(key, revision.get());
     }
 
     private boolean compacted(long commitSeq) {
@@ -123,7 +128,7 @@ public class VersionedStoreReader implements Reader {
     }
 
     @Override
-    public ReadResult getAt(byte[] key, long commitSeq) throws IOException {
+    public ReadResult getAt(byte[] key, long commitSeq) throws IOException, InconsistentStoreException.MissingRecordForRevision {
         if (compacted(commitSeq)) {
             return new ReadResult.Compacted(firstCommitSeq, commitSeq);
         }
@@ -132,10 +137,14 @@ public class VersionedStoreReader implements Reader {
             return new ReadResult.Future(lastCommitSeq, commitSeq);
         }
 
-        return timeline(key)
-                .flatMap(tl -> tl.floor(commitSeq))
-                .map(this::get)
-                .orElseGet(ReadResult.Absent::new);
+        var revision = timeline(key)
+                .flatMap(tl -> tl.floor(commitSeq));
+
+        if (revision.isEmpty()) {
+            return new ReadResult.Absent();
+        }
+
+        return get(key, revision.get());
     }
 
     @Override
