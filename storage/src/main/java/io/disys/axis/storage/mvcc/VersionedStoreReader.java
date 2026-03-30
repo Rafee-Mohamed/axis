@@ -89,21 +89,28 @@ public class VersionedStoreReader implements Reader {
         );
     }
 
+    private Optional<KeyTimelineView> timeline(byte[] key, long commitSeq) {
+        return index.pin(key, firstCommitSeq, commitSeq);
+    }
+
+    private Optional<KeyTimelineView> timeline(byte[] key) {
+        return index.pin(key, firstCommitSeq, lastCommitSeq);
+    }
+
+    private ReadResult get(Revision revision) {
+        return buffer.get(revision)
+                .map(RevisionRecord::record)
+                .or(() -> txn.get(db.revision(), encoder.encode(revision))
+                        .map(decoder::decodeRecord))
+                .<ReadResult>map(ReadResult.Present::new)
+                .orElseGet(ReadResult.Absent::new);
+    }
+
     @Override
     public ReadResult get(byte[] key) throws IOException {
-        var currentSpan = index.get(key).flatMap(KeyTimeline::liveSpan);
-        if (currentSpan.isEmpty()) {
-            return new ReadResult.Absent();
-        }
-        var latestRevision = currentSpan.get().lastRevision();
-        var revision = encoder.encode(latestRevision);
-
-        var revisionRecord = buffer.get(latestRevision);
-        return revisionRecord
-                .map(RevisionRecord::record)
-                .or(() -> txn.get(db.revision(), revision)
-                .map(decoder::decodeRecord))
-                .<ReadResult>map(ReadResult.Present::new)
+        return timeline(key)
+                .flatMap(KeyTimelineView::floor)
+                .map(this::get)
                 .orElseGet(ReadResult.Absent::new);
     }
 
@@ -125,8 +132,10 @@ public class VersionedStoreReader implements Reader {
             return new ReadResult.Future(lastCommitSeq, commitSeq);
         }
 
-
-        return null;
+        return timeline(key)
+                .flatMap(tl -> tl.floor(commitSeq))
+                .map(this::get)
+                .orElseGet(ReadResult.Absent::new);
     }
 
     @Override

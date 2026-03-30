@@ -40,6 +40,14 @@ public record DeadSpan(List<Revision> revisions, long createdAt, int version) im
         return version;
     }
 
+    public Revision get(int idx) {
+        return revisions.get(idx);
+    }
+
+    public int size() {
+        return revisions.size();
+    }
+
     int lowerBound(long commitSeq) {
         var left = 0;
         var right = revisions.size() - 1;

@@ -63,7 +63,7 @@ public class WriteSession implements AutoCloseable {
     }
 
     void put(byte[] key, byte[] val, int ordinal) throws IOException {
-        var revision = new Revision(bound.end() + 1, ordinal);
+        var revision = Revision.modify(bound.end() + 1, ordinal);
 
         var timeline = index.add(key, revision);
         var span = timeline.lastSpan();
@@ -75,7 +75,7 @@ public class WriteSession implements AutoCloseable {
     }
 
     boolean delete(byte[] key, int ordinal) throws IOException {
-        var revision = new Revision(bound.end() + 1, ordinal);
+        var revision = Revision.modify(bound.end() + 1, ordinal);
         var timeline = index.complete(key, revision);
 
         if (timeline.isEmpty()) {
