@@ -1,6 +1,7 @@
 package io.disys.axis.storage.swmr;
 
 public sealed interface Node<K, V> {
+    KeyStorage<K> keys();
     record Internal<K, V>(
             KeyStorage<K> keys,
             Node<K, V>[] children

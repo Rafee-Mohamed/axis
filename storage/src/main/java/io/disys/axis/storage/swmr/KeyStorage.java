@@ -3,11 +3,11 @@ package io.disys.axis.storage.swmr;
 public interface KeyStorage<K> {
     int size();
 
-    K keyAt(int index);
+    K key(int idx);
 
-    int compareAt(int index, K key);
+    int compare(int idx, K key);
 
-    KeyStorage<K> insertAt(int index, K key);
+    KeyStorage<K> insert(int idx, K key);
 
-    Split<K> split(int mid);
+    Split<K> insertAndSplit(int insertIdx, int splitIdx, K key);
 }
