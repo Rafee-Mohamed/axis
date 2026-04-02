@@ -78,6 +78,61 @@ public class PersistentBTree<K, V> {
         };
     }
 
+    // ====== RANGE ======
+
+    List<KeyVal<K, V>> range(K from, K to) {
+        var node = root;
+        if (node == null) {
+            return List.of();
+        }
+
+        var out = new ArrayList<KeyVal<K, V>>();
+        range(node, from, to, out::add);
+        return out;
+    }
+
+    <T extends Collection<KeyVal<K, V>>> T range(K from, K to, T out) {
+        var node = root;
+        if (node == null) {
+            return out;
+        }
+
+        range(node, from, to, out::add);
+        return out;
+    }
+
+    void range(K from, K to, Consumer<KeyVal<K, V>> consumer) {
+        var node = root;
+        if (node == null) {
+            return;
+        }
+
+        range(node, from, to, consumer);
+    }
+
+    void range(Node<K, V> node, K from, K to, Consumer<KeyVal<K, V>>  consumer) {
+        switch (node) {
+            case Node.Internal<K, V>(var keys, var children) -> {
+                var start = lowerBound(keys, from).idx();
+                var end = lowerBound(keys, to).idx();
+
+                // start > end returns
+                for (var idx = start; idx <= end; idx++) {
+                    range(children.child(idx), from, to, consumer);
+                }
+            }
+            case Node.Leaf<K, V>(var keys, var vals) -> {
+                var start = lowerBound(keys, from).idx();
+                var endLb = lowerBound(keys, to);
+                var end = endLb.found() ? endLb.idx() : endLb.idx() - 1;
+
+                for (var idx = start; idx <= end; idx++) {
+                    consumer.accept(KeyVal.of(keys.key(idx), vals.val(idx)));
+                }
+            }
+        }
+    }
+
 
     // ====== PUT ======
 
