@@ -9,5 +9,5 @@ public interface KeyStorage<K> {
 
     KeyStorage<K> insert(int idx, K key);
 
-    Split<K> insertAndSplit(int insertIdx, int splitIdx, K key);
+    KeySplit<K> insertAndSplit(int insertIdx, int splitIdx, K key);
 }

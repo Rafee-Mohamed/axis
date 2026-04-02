@@ -4,7 +4,7 @@ public sealed interface Node<K, V> {
     KeyStorage<K> keys();
     record Internal<K, V>(
             KeyStorage<K> keys,
-            Node<K, V>[] children
+            Children<K, V> children
     ) implements Node<K, V> {
     }
 

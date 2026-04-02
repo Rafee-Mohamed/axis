@@ -60,7 +60,7 @@ public class PackedByteKeyStorage implements KeyStorage<byte[]> {
     }
 
     @Override
-    public Split<byte[]> insertAndSplit(int insertIdx, int splitIdx, byte[] key) {
+    public KeySplit<byte[]> insertAndSplit(int insertIdx, int splitIdx, byte[] key) {
         checkInsertBounds(insertIdx);
         checkSplitBounds(splitIdx);
 
@@ -111,7 +111,7 @@ public class PackedByteKeyStorage implements KeyStorage<byte[]> {
 
             var rightKeyStorage = new PackedByteKeyStorage(rightKeys, rightOffsets, comparator);
 
-            return new Split<>(leftKeyStorage, rightKeyStorage, rightKeyStorage.key(0));
+            return new KeySplit<>(leftKeyStorage, rightKeyStorage, rightKeyStorage.key(0));
         }
 
         var leftKeys = new byte[offsets[splitIdx] + key.length];
@@ -155,7 +155,7 @@ public class PackedByteKeyStorage implements KeyStorage<byte[]> {
         // splitIdx is checked to be within bounds - 0 < splitIdx <= size
         // therefore, at splitIdx a key will be present which is the first key
         // of rightKeyStorage, so key(0) won't fail.
-        return new Split<>(leftKeyStorage, rightKeyStorage, rightKeyStorage.key(0));
+        return new KeySplit<>(leftKeyStorage, rightKeyStorage, rightKeyStorage.key(0));
     }
 
     private void checkSplitBounds(int idx) {

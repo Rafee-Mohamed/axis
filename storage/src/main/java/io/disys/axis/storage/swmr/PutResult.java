@@ -1,13 +1,13 @@
 package io.disys.axis.storage.swmr;
 
-public sealed interface InsertResult<K, V> {
+public sealed interface PutResult<K, V> {
     record NoSplit<K, V>(
             Node<K, V> node
-    ) implements InsertResult<K, V> {}
+    ) implements PutResult<K, V> {}
 
     record Split<K, V>(
             Node<K, V> left,
             Node<K, V> right,
             K promotedKey
-    ) implements InsertResult<K, V> {}
+    ) implements PutResult<K, V> {}
 }
