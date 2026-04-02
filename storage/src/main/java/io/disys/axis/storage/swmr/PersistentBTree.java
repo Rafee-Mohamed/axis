@@ -28,30 +28,6 @@ public class PersistentBTree<K, V> {
         };
     }
 
-    record LowerBound(boolean found, int idx) {}
-
-    LowerBound lowerBound(KeyStorage<K> keys, K key) {
-        var left = 0;
-        var right = keys.size() - 1;
-
-        while (left <= right) {
-            var mid = left + (right - left) / 2;
-            var cmp = keys.compare(mid, key);
-
-            if (cmp == 0) {
-                return new LowerBound(true, mid);
-            }
-
-            if (cmp > 0) {
-                right = mid - 1;
-            } else {
-                left = mid + 1;
-            }
-        }
-
-        return new LowerBound(false, left);
-    }
-
     // ====== GET ======
 
     V get(K key) {
@@ -66,13 +42,13 @@ public class PersistentBTree<K, V> {
     V get(Node<K, V> node, K key) {
         return switch (node) {
             case Node.Internal<K, V>(var keys, var children) -> {
-                var lb = lowerBound(keys, key);
+                var lb = Search.lowerBound(keys, key);
                 var childIdx = lb.found() ? lb.idx() + 1 : lb.idx();
                 yield get(children.child(childIdx), key);
             }
 
             case Node.Leaf<K, V>(var keys, var vals) -> {
-                var lb = lowerBound(keys, key);
+                var lb = Search.lowerBound(keys, key);
                 yield lb.found() ? vals.val(lb.idx()) : null;
             }
         };
@@ -113,8 +89,8 @@ public class PersistentBTree<K, V> {
     void range(Node<K, V> node, K from, K to, Consumer<KeyVal<K, V>>  consumer) {
         switch (node) {
             case Node.Internal<K, V>(var keys, var children) -> {
-                var start = lowerBound(keys, from).idx();
-                var end = lowerBound(keys, to).idx();
+                var start = Search.lowerBound(keys, from).idx();
+                var end = Search.lowerBound(keys, to).idx();
 
                 // start > end returns
                 for (var idx = start; idx <= end; idx++) {
@@ -122,8 +98,8 @@ public class PersistentBTree<K, V> {
                 }
             }
             case Node.Leaf<K, V>(var keys, var vals) -> {
-                var start = lowerBound(keys, from).idx();
-                var endLb = lowerBound(keys, to);
+                var start = Search.lowerBound(keys, from).idx();
+                var endLb = Search.lowerBound(keys, to);
                 var end = endLb.found() ? endLb.idx() : endLb.idx() - 1;
 
                 for (var idx = start; idx <= end; idx++) {
@@ -150,7 +126,7 @@ public class PersistentBTree<K, V> {
     }
 
     private PutResult<K, V> putInternal(KeyStorage<K> keys, Children<K, V> children, K key, V val) {
-        var lb = lowerBound(keys, key);
+        var lb = Search.lowerBound(keys, key);
         var childIdx = lb.found() ? lb.idx() + 1 : lb.idx();
         var child = children.child(childIdx);
 
@@ -180,7 +156,7 @@ public class PersistentBTree<K, V> {
 
 
     private PutResult<K, V> putLeaf(KeyStorage<K> keys, ValueStorage<V> vals, K key, V val) {
-        var lb = lowerBound(keys, key);
+        var lb = Search.lowerBound(keys, key);
         if (lb.found()) {
             return new PutResult.NoSplit<>(new Node.Leaf<>(
                     keys,

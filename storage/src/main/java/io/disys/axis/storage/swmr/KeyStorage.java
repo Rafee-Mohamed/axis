@@ -1,11 +1,8 @@
 package io.disys.axis.storage.swmr;
 
-public interface KeyStorage<K> {
-    int size();
+public interface KeyStorage<K> extends IndexedComparator<K> {
 
     K key(int idx);
-
-    int compare(int idx, K key);
 
     KeyStorage<K> insert(int idx, K key);
 
