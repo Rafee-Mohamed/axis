@@ -1,6 +1,12 @@
 package io.disys.axis.storage.swmr;
 
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.function.Consumer;
+
 // Single Writer Multi Reader ordered index
 public class PersistentBTree<K, V> {
     private volatile Node<K, V> root;
@@ -45,6 +51,35 @@ public class PersistentBTree<K, V> {
 
         return new LowerBound(false, left);
     }
+
+    // ====== GET ======
+
+    V get(K key) {
+        var node = root;
+        if (node == null) {
+            return null;
+        }
+
+        return get(node, key);
+    }
+
+    V get(Node<K, V> node, K key) {
+        return switch (node) {
+            case Node.Internal<K, V>(var keys, var children) -> {
+                var lb = lowerBound(keys, key);
+                var childIdx = lb.found() ? lb.idx() + 1 : lb.idx();
+                yield get(children.child(childIdx), key);
+            }
+
+            case Node.Leaf<K, V>(var keys, var vals) -> {
+                var lb = lowerBound(keys, key);
+                yield lb.found() ? vals.val(lb.idx()) : null;
+            }
+        };
+    }
+
+
+    // ====== PUT ======
 
     PutResult<K, V> put(Node<K, V> node, K key, V val) {
         if (node == null) {
