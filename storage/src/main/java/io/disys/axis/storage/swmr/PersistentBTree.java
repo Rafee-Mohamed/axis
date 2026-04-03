@@ -117,6 +117,11 @@ public class PersistentBTree<K, V> implements Iterable<KeyVal<K, V>>{
     }
 
 
+    public Iterator<KeyVal<K, V>> rangeIterator(K from, K to) {
+        return BoundedBTreeIterator.of(root, from, to);
+    }
+
+
     // ====== PUT ======
 
     PutResult<K, V> put(Node<K, V> node, K key, V val) {
