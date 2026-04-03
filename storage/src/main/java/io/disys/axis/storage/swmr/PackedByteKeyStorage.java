@@ -28,13 +28,13 @@ public class PackedByteKeyStorage implements KeyStorage<byte[]> {
 
     @Override
     public byte[] key(int idx) {
-        checkBounds(idx);
+        checkIndexBounds(idx);
         return Arrays.copyOfRange(keys, offsets[idx], offsets[idx + 1]);
     }
 
     @Override
     public int compare(int idx, byte[] key) {
-        checkBounds(idx);
+        checkIndexBounds(idx);
         return comparator.compare(keys, offsets[idx], offsets[idx + 1], key);
     }
 
@@ -62,7 +62,7 @@ public class PackedByteKeyStorage implements KeyStorage<byte[]> {
 
     @Override
     public KeyStorage<byte[]> remove(int idx) {
-        checkBounds(idx);
+        checkIndexBounds(idx);
         var removedKeyLen = offsets[idx + 1] - offsets[idx];
         var newKeys = new byte[keys.length - removedKeyLen];
         System.arraycopy(keys, 0, newKeys, 0,  offsets[idx]);
@@ -226,7 +226,7 @@ public class PackedByteKeyStorage implements KeyStorage<byte[]> {
 
     @Override
     public KeyStorage<byte[]> removeAndInsert(int removeIdx, int insertIdx, byte[] key) {
-        checkBounds(removeIdx);
+        checkIndexBounds(removeIdx);
         checkInsertBounds(insertIdx);
 
         var removedKeyLen = offsets[removeIdx + 1] - offsets[removeIdx];
@@ -366,7 +366,7 @@ public class PackedByteKeyStorage implements KeyStorage<byte[]> {
         }
     }
 
-    private void checkBounds(int idx) {
+    private void checkIndexBounds(int idx) {
         if (idx < 0 || idx >= size()) {
             throw new IndexOutOfBoundsException("Index " + idx + " is out of bounds: " + "[" + 0 + " " + size() + ")");
         }

@@ -144,7 +144,7 @@ public class PersistentBTree<K, V> implements Iterable<KeyVal<K, V>>{
 
         return switch (put(child, key, val)) {
             case PutResult.NoSplit<K, V>(var node) -> new PutResult.NoSplit<>(
-                    new Node.Internal<>(keys, children.insert(childIdx, node))
+                    new Node.Internal<>(keys, children.replace(childIdx, node))
             );
             case PutResult.Split<K, V>(var left, var right, var promotedKey) -> {
                 if (keys.size() < maxKeys) {
@@ -164,8 +164,6 @@ public class PersistentBTree<K, V> implements Iterable<KeyVal<K, V>>{
             }
         };
     }
-
-
 
     private PutResult<K, V> putLeaf(KeyStorage<K> keys, ValueStorage<V> vals, K key, V val) {
         var lb = Search.lowerBound(keys, key);

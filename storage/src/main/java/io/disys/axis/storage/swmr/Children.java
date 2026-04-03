@@ -13,7 +13,7 @@ public class Children<K, V> {
     // invariant: children.length = keys.size() + 1
     // therefore, always children.length >= 2
     static <K, V> Children<K, V> of(Node<K, V> left, Node<K, V> right) {
-        return new Children<K, V>(new Node[]{left, right})
+        return new Children<K, V>(new Node[]{left, right});
     }
 
     int size() {
@@ -21,12 +21,12 @@ public class Children<K, V> {
     }
 
     Node<K, V> child(int idx) {
-        checkBounds(idx);
+        checkIndexBounds(idx);
         return nodes[idx];
     }
 
-    Children<K, V> insert(int idx, Node<K, V> node) {
-        checkBounds(idx);
+    Children<K, V> replace(int idx, Node<K, V> node) {
+        checkIndexBounds(idx);
 
         var newNodes = Arrays.copyOf(nodes, nodes.length);
         newNodes[idx] = node;
@@ -43,6 +43,50 @@ public class Children<K, V> {
         newNodes[idx] = left;
         newNodes[idx + 1] = right;
         System.arraycopy(nodes, idx + 1, newNodes, idx + 2, nodes.length - idx - 1);
+
+        return new Children<>(newNodes);
+    }
+
+    Children<K, V> remove(int idx) {
+        checkIndexBounds(idx);
+
+        var newNodes = (Node<K,V>[]) new Node[nodes.length - 1];
+
+        System.arraycopy(nodes, 0, newNodes, 0, idx);
+        System.arraycopy(nodes, idx + 1, newNodes, idx, nodes.length - idx - 1);
+
+        return new Children<>(newNodes);
+    }
+
+    Children<K, V> merge(Children<K, V> other) {
+        var otherNodes = other.nodes;
+        var newNodes = (Node<K,V>[]) new Node[nodes.length + otherNodes.length];
+
+        System.arraycopy(nodes, 0, newNodes, 0, nodes.length);
+        System.arraycopy(otherNodes, 0, newNodes, nodes.length, otherNodes.length);
+
+        return new Children<>(newNodes);
+    }
+    
+    Children<K, V> removeAndInsert(int removeIdx, int insertIdx, Node<K, V> node) {
+        checkIndexBounds(removeIdx);
+        checkIndexBounds(insertIdx);
+
+        var newNodes = (Node<K, V>[]) new Node[nodes.length];
+
+        // prefix is unchanged before insertIdx or removeIdx
+        var unchangedPrefixEnd = Math.min(removeIdx, insertIdx);
+        System.arraycopy(nodes, 0, newNodes, 0, unchangedPrefixEnd);
+
+        if (insertIdx > removeIdx) {
+            System.arraycopy(nodes, removeIdx + 1, newNodes, removeIdx, insertIdx - removeIdx - 1);
+            newNodes[insertIdx] = node;
+            System.arraycopy(nodes, insertIdx, newNodes, insertIdx + 1, nodes.length - insertIdx);
+        } else { // insert then remove, insertIdx == prefixEnd
+            newNodes[insertIdx] = node;
+            System.arraycopy(nodes, insertIdx, newNodes, insertIdx + 1, removeIdx - insertIdx);
+            System.arraycopy(nodes, removeIdx + 1, newNodes, removeIdx, nodes.length - removeIdx - 1);
+        }
 
         return new Children<>(newNodes);
     }
@@ -106,8 +150,8 @@ public class Children<K, V> {
         }
     }
 
-    private void checkBounds(int idx) {
-        if (idx < 0 || idx > nodes.length) {
+    private void checkIndexBounds(int idx) {
+        if (idx < 0 || idx >= nodes.length) {
             throw new IndexOutOfBoundsException("Index " + idx + " is out of bounds: " + "[" + 0 + " " + nodes.length + ")");
         }
     }

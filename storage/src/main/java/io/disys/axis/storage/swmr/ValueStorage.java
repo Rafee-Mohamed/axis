@@ -16,7 +16,7 @@ public class ValueStorage<V> {
     }
 
     V val(int idx) {
-        checkBounds(idx);
+        checkIndexBounds(idx);
         return vals[idx];
     }
 
@@ -33,7 +33,7 @@ public class ValueStorage<V> {
     }
 
     ValueStorage<V> remove(int idx) {
-        checkBounds(idx);
+        checkIndexBounds(idx);
         var newVals = (V[]) new Object[vals.length - 1];
 
         System.arraycopy(vals, 0, newVals, 0, idx);
@@ -43,8 +43,8 @@ public class ValueStorage<V> {
     }
 
     ValueStorage<V> removeAndInsert(int removeIdx, int insertIdx, V val) {
-        checkBounds(removeIdx);
-        checkBounds(insertIdx);
+        checkIndexBounds(removeIdx);
+        checkIndexBounds(insertIdx);
 
         var newVals = (V[]) new Object[vals.length];
 
@@ -137,7 +137,7 @@ public class ValueStorage<V> {
         }
     }
 
-    private void checkBounds(int idx) {
+    private void checkIndexBounds(int idx) {
         if (idx < 0 || idx >= size()) {
             throw new IndexOutOfBoundsException("Index " + idx + " is out of bounds: " + "[" + 0 + " " + size() + ")");
         }
