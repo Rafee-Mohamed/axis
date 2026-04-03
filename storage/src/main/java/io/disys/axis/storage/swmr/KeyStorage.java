@@ -8,6 +8,8 @@ public interface KeyStorage<K> extends IndexedComparator<K> {
 
     KeyStorage<K> remove(int idx);
 
+    KeyStorage<K> replace(int idx, K key);
+
     KeySplit<K> split(int idx);
 
     KeyStorage<K> merge(KeyStorage<K> other);

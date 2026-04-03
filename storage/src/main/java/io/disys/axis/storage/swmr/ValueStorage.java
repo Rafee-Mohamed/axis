@@ -1,5 +1,7 @@
 package io.disys.axis.storage.swmr;
 
+import java.util.Arrays;
+
 public class ValueStorage<V> {
     private final V[] vals;
 
@@ -28,6 +30,15 @@ public class ValueStorage<V> {
         System.arraycopy(vals, 0, newVals, 0, idx);
         newVals[idx] = val;
         System.arraycopy(vals, idx, newVals, idx + 1, vals.length - idx);
+
+        return new ValueStorage<>(newVals);
+    }
+
+    ValueStorage<V> replace(int idx, V val) {
+        checkIndexBounds(idx);
+
+        var newVals = Arrays.copyOf(vals, vals.length);
+        newVals[idx] = val;
 
         return new ValueStorage<>(newVals);
     }

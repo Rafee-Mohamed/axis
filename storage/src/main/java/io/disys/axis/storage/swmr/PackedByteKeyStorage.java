@@ -79,6 +79,34 @@ public class PackedByteKeyStorage implements KeyStorage<byte[]> {
     }
 
     @Override
+    public KeyStorage<byte[]> replace(int idx, byte[] key) {
+
+        var replacedKeyLen =  offsets[idx + 1] - offsets[idx];
+        var newKeys = new byte[keys.length - replacedKeyLen + key.length];
+
+        System.arraycopy(keys, 0, newKeys, 0, offsets[idx]);
+        System.arraycopy(key, 0, newKeys, offsets[idx], key.length);
+        System.arraycopy(
+                keys,
+                offsets[idx + 1],
+                newKeys,
+                offsets[idx] + key.length,
+                keys.length - offsets[idx + 1]
+        );
+
+        var newOffsets = new int[offsets.length];
+
+        System.arraycopy(offsets, 0, newOffsets, 0, idx + 1);
+        newOffsets[idx + 1] = newOffsets[idx] + key.length;
+
+        for (var i = idx + 2; i < offsets.length; i++) {
+            newOffsets[i] = offsets[i] - replacedKeyLen + key.length;
+        }
+
+        return new PackedByteKeyStorage(newKeys, newOffsets, comparator);
+    }
+
+    @Override
     public KeySplit<byte[]> split(int idx) {
         checkSplitBounds(idx);
         var leftKeys = new byte[offsets[idx]];

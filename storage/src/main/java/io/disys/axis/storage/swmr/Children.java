@@ -33,6 +33,18 @@ public class Children<K, V> {
         return new Children<>(newNodes);
     }
 
+    Children<K, V> insert(int idx, Node<K, V> node) {
+        checkInsertBounds(idx);
+
+        var newNodes = (Node<K,V>[]) new Node[nodes.length + 1];
+
+        System.arraycopy(nodes, 0, newNodes, 0, idx);
+        newNodes[idx] = node;
+        System.arraycopy(nodes, idx, newNodes, idx + 1, nodes.length - idx);
+
+        return new Children<>(newNodes);
+    }
+
 
     Children<K, V> insert(int idx, Node<K, V> left, Node<K, V> right) {
         checkInsertBounds(idx);
@@ -47,6 +59,19 @@ public class Children<K, V> {
         return new Children<>(newNodes);
     }
 
+    Children<K, V> replace(int idx, Node<K, V> left, Node<K, V> right) {
+        checkIndexBounds(idx);
+        checkIndexBounds(idx + 1);
+
+        var newNodes = (Node<K,V>[]) new Node[nodes.length];
+
+        System.arraycopy(nodes, 0, newNodes, 0, nodes.length);
+        newNodes[idx] = left;
+        newNodes[idx + 1] = right;
+
+        return new Children<>(newNodes);
+    }
+
     Children<K, V> remove(int idx) {
         checkIndexBounds(idx);
 
@@ -54,6 +79,18 @@ public class Children<K, V> {
 
         System.arraycopy(nodes, 0, newNodes, 0, idx);
         System.arraycopy(nodes, idx + 1, newNodes, idx, nodes.length - idx - 1);
+
+        return new Children<>(newNodes);
+    }
+
+    Children<K, V> removeAndReplace(int idx, Node<K, V> node) {
+        checkIndexBounds(idx);
+
+        var newNodes = (Node<K,V>[]) new Node[nodes.length - 1];
+
+        System.arraycopy(nodes, 0, newNodes, 0, idx);
+        System.arraycopy(nodes, idx + 1, newNodes, idx, nodes.length - idx - 1);
+        newNodes[idx] = node;
 
         return new Children<>(newNodes);
     }
