@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.function.Consumer;
 
 // Single Writer Multi Reader ordered index
-public class PersistentBTree<K, V> {
+public class PersistentBTree<K, V> implements Iterable<KeyVal<K, V>>{
     private volatile Node<K, V> root;
     private final int maxKeys;
     private final int splitAt;
@@ -107,6 +107,13 @@ public class PersistentBTree<K, V> {
                 }
             }
         }
+    }
+
+    // ====== ITERATION ======
+
+    @Override
+    public Iterator<KeyVal<K, V>> iterator() {
+        return BTreeIterator.of(root);
     }
 
 
