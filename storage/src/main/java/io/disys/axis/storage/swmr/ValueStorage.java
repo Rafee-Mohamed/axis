@@ -32,6 +32,62 @@ public class ValueStorage<V> {
         return new ValueStorage<>(newVals);
     }
 
+    ValueStorage<V> remove(int idx) {
+        checkBounds(idx);
+        var newVals = (V[]) new Object[vals.length - 1];
+
+        System.arraycopy(vals, 0, newVals, 0, idx);
+        System.arraycopy(vals, idx + 1, newVals, idx, vals.length - idx - 1);
+
+        return new ValueStorage<>(newVals);
+    }
+
+    ValueStorage<V> removeAndInsert(int removeIdx, int insertIdx, V val) {
+        checkBounds(removeIdx);
+        checkBounds(insertIdx);
+
+        var newVals = (V[]) new Object[vals.length];
+
+        // prefix is unchanged before insertIdx or removeIdx
+        var unchangedPrefixEnd = Math.min(removeIdx, insertIdx);
+        System.arraycopy(vals, 0, newVals, 0, unchangedPrefixEnd);
+
+        if (insertIdx > removeIdx) {
+            System.arraycopy(vals, removeIdx + 1, newVals, removeIdx, insertIdx - removeIdx - 1);
+            newVals[insertIdx] = val;
+            System.arraycopy(vals, insertIdx, newVals, insertIdx + 1, vals.length - insertIdx);
+        } else { // insert then remove, insertIdx == prefixEnd
+            newVals[insertIdx] = val;
+            System.arraycopy(vals, insertIdx, newVals, insertIdx + 1, removeIdx - insertIdx);
+            System.arraycopy(vals, removeIdx + 1, newVals, removeIdx, vals.length - removeIdx - 1);
+        }
+
+        return new ValueStorage<>(newVals);
+    }
+
+    ValueStorage<V> merge(ValueStorage<V> other) {
+        var newVals = (V[]) new Object[vals.length + other.size()];
+        System.arraycopy(vals, 0, newVals, 0, vals.length);
+        System.arraycopy(other.vals, 0, newVals, vals.length, other.size());
+
+        return new ValueStorage<>(newVals);
+    }
+
+    ValueStorage<V> insertAndMerge(int insertIdx, V val, ValueStorage<V> other) {
+        checkInsertBounds(insertIdx);
+
+        var otherVals = other.vals;
+        var newVals = (V[]) new Object[vals.length + otherVals.length + 1];
+
+        System.arraycopy(vals, 0, newVals, 0, insertIdx);
+        newVals[insertIdx] = val;
+        System.arraycopy(vals, insertIdx, newVals, insertIdx + 1, vals.length - insertIdx);
+
+        System.arraycopy(otherVals, 0, newVals, vals.length + 1, otherVals.length);
+
+        return new ValueStorage<>(newVals);
+    }
+
     ValueSplit<V> insertAndSplit(int insertIdx, int splitIdx, V val) {
         checkInsertBounds(insertIdx);
         checkSplitBounds(splitIdx);
