@@ -8,14 +8,14 @@ import java.util.List;
 import java.util.function.Consumer;
 
 // Single Writer Multi Reader ordered index
-public class PersistentBTree<K, V> implements Iterable<KeyVal<K, V>>{
+public class PersistentBPlusTree<K, V> implements Iterable<KeyVal<K, V>>{
     private volatile Node<K, V> root;
     private final int maxKeys;
     // split at
     private final int minKeys;
     private final KeyStorageFactory<K> ksf;
 
-    PersistentBTree(int maxKeys, KeyStorageFactory<K> ksf) {
+    PersistentBPlusTree(int maxKeys, KeyStorageFactory<K> ksf) {
         this.maxKeys = maxKeys;
         this.minKeys = maxKeys / 2;
         this.ksf = ksf;
