@@ -1,7 +1,7 @@
 package io.disys.axis.backend.lmdb;
 
-import io.disys.axis.storage.backend.CloseableIterator;
-import io.disys.axis.storage.backend.KeyVal;
+import io.disys.axis.backend.CloseableIterator;
+import io.disys.axis.backend.KeyVal;
 import org.lmdbjava.CursorIterable;
 
 import java.nio.ByteBuffer;

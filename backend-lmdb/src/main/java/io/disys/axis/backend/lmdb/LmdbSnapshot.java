@@ -1,6 +1,6 @@
 package io.disys.axis.backend.lmdb;
 
-import io.disys.axis.storage.backend.Snapshot;
+import io.disys.axis.backend.Snapshot;
 import org.lmdbjava.Env;
 
 import java.io.IOException;

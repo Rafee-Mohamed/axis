@@ -1,6 +1,6 @@
 package io.disys.axis.backend.lmdb;
 
-import io.disys.axis.storage.backend.Database;
+import io.disys.axis.backend.Database;
 import java.nio.file.Path;
 import java.util.Set;
 

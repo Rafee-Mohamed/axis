@@ -1,9 +1,9 @@
 package io.disys.axis.backend.lmdb;
 
-import io.disys.axis.storage.backend.CloseableIterator;
-import io.disys.axis.storage.backend.Database;
-import io.disys.axis.storage.backend.KeyVal;
-import io.disys.axis.storage.backend.ReadTxn;
+import io.disys.axis.backend.CloseableIterator;
+import io.disys.axis.backend.Database;
+import io.disys.axis.backend.KeyVal;
+import io.disys.axis.backend.ReadTxn;
 import org.lmdbjava.Dbi;
 import org.lmdbjava.KeyRange;
 import org.lmdbjava.Txn;

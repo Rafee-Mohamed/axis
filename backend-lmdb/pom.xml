@@ -20,7 +20,7 @@
     <dependencies>
         <dependency>
             <groupId>io.disys</groupId>
-            <artifactId>storage</artifactId>
+            <artifactId>backend</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

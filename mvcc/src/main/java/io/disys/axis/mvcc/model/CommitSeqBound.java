@@ -1,0 +1,28 @@
+package io.disys.axis.mvcc.model;
+
+public class CommitSeqBound {
+    private volatile long start;
+    private volatile long end;
+
+    public CommitSeqBound(long start, long end) {
+        this.start = start;
+        this.end = end;
+    }
+
+    public long start() {
+        return start;
+    }
+
+    public long end() {
+        return end;
+    }
+
+    public void compact(long commitSeq) {
+        start = commitSeq;
+    }
+
+    public void advance() {
+        ++end;
+    }
+
+}
