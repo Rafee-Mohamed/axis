@@ -95,6 +95,31 @@ public class VersionedStoreReader implements Reader {
         );
     }
 
+    KeyTimelineIndex index() {
+        return index;
+    }
+
+    RecordEncoder encoder() {
+        return encoder;
+    }
+
+    RevisionRecordBuffer.View buffer() {
+        return buffer;
+    }
+
+    RecordDecoder decoder() {
+        return decoder;
+    }
+
+    ReadTxn txn() {
+        return txn;
+    }
+
+    VersionedStore.Db db() {
+        return db;
+    }
+
+
     private Optional<KeyTimelineView> timeline(byte[] key, long commitSeq) {
         return index.pin(key, firstCommitSeq, commitSeq);
     }
@@ -103,7 +128,7 @@ public class VersionedStoreReader implements Reader {
         return index.pin(key, firstCommitSeq, lastCommitSeq);
     }
 
-    private ReadResult get(byte[] key, Revision revision) throws InconsistentStoreException.MissingRecordForRevision {
+    ReadResult get(byte[] key, Revision revision) {
         return buffer.get(revision)
                 .map(RevisionRecord::record)
                 .or(() -> txn.get(db.revision(), encoder.encode(revision))
@@ -114,7 +139,7 @@ public class VersionedStoreReader implements Reader {
     }
 
     @Override
-    public ReadResult get(byte[] key) throws IOException, InconsistentStoreException.MissingRecordForRevision {
+    public ReadResult get(byte[] key) {
         var revision = timeline(key)
                 .flatMap(KeyTimelineView::floor);
 
@@ -134,7 +159,7 @@ public class VersionedStoreReader implements Reader {
     }
 
     @Override
-    public ReadResult getAt(byte[] key, long commitSeq) throws IOException, InconsistentStoreException.MissingRecordForRevision {
+    public ReadResult getAt(byte[] key, long commitSeq) {
         if (compacted(commitSeq)) {
             return new ReadResult.Compacted(firstCommitSeq, commitSeq);
         }
@@ -164,7 +189,7 @@ public class VersionedStoreReader implements Reader {
     }
 
     @Override
-    public void close() throws IOException {
+    public void close() {
         txn.close();
     }
 }

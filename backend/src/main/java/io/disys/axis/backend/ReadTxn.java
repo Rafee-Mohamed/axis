@@ -7,5 +7,5 @@ public interface ReadTxn extends AutoCloseable {
     Optional<byte[]> get(Database db, byte[] key);
     CloseableIterator<KeyVal> range(Database db, byte[] start, byte[] end);
     @Override
-    void close() throws IOException;
+    void close();
 }

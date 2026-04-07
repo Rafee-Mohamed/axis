@@ -18,12 +18,8 @@ final class LmdbSnapshot implements Snapshot {
     }
 
     @Override
-    public void take() throws IOException {
-        try {
-            env.copy(destination.toFile());
-        } catch (Exception e) {
-            throw new IOException("snapshot failed: ", e);
-        }
+    public void take() {
+        env.copy(destination.toFile());
     }
 
     @Override

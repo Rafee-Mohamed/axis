@@ -29,7 +29,7 @@ public class VersionedStore {
     public record MetaDb(String name, byte[] persistedCommitSeqKey, byte[] firstCommitSeqKey) implements Database {
     }
 
-    VersionedStore(Backend backend, VersionedStoreConfig config) throws Exception {
+    VersionedStore(Backend backend, VersionedStoreConfig config) {
         this.backend = backend;
         this.config = config;
         this.index = new KeyTimelineIndex();
@@ -47,7 +47,7 @@ public class VersionedStore {
         return new VersionedStore(backend, config);
     }
 
-    private static CommitSeqBound getState(Backend backend, MetaDb db) throws Exception {
+    private static CommitSeqBound getState(Backend backend, MetaDb db) {
         try (var readTxn = backend.beginRead()) {
             var lastPersistedCommitSeq = readTxn.get(db, db.persistedCommitSeqKey())
                     .map(ByteBuffer::wrap)
@@ -77,7 +77,7 @@ public class VersionedStore {
     // Only single thread access for writer/compact/sync
 
     // Behaviour of concurrent threads accessing these are undefined
-    public void compact(long commitSeq) throws IOException {
+    public void compact(long commitSeq) {
         if (bound.start() >= commitSeq) {
             return;
         }
@@ -140,13 +140,13 @@ public class VersionedStore {
         session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
     }
 
-    public void sync() throws IOException {
+    public void sync() {
         session.close();
         renewBuffer();
         session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
     }
 
-    public Writer writer() throws IOException {
+    public Writer writer() {
         if (session.closeIfExpired()) {
             // single buffer per session
             // if older readers hold the buffer for read,

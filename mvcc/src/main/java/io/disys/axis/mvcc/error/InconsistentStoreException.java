@@ -5,7 +5,7 @@ import io.disys.axis.mvcc.model.Revision;
 
 import java.util.HexFormat;
 
-public sealed class InconsistentStoreException extends Exception
+public sealed class InconsistentStoreException extends RuntimeException
         permits InconsistentStoreException.MissingRecordForRevision {
 
     public InconsistentStoreException(String message) {

@@ -12,10 +12,10 @@ import java.io.IOException;
 import java.util.Optional;
 
 public interface Reader extends AutoCloseable {
-    ReadResult get(byte[] key) throws IOException, InconsistentStoreException;
-    ReadResult getAt(byte[] key, long commitSeq) throws IOException, InconsistentStoreException;
+    ReadResult get(byte[] key);
+    ReadResult getAt(byte[] key, long commitSeq);
     CloseableIterator<io.disys.axis.mvcc.model.Record> range(byte[] startKey, byte[] endKey);
     CloseableIterator<io.disys.axis.mvcc.model.Record> rangeAt(byte[] startKey, byte[] endKey, long commitSeq);
     @Override
-    void close() throws IOException;
+    void close();
 }

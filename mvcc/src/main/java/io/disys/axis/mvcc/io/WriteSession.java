@@ -3,6 +3,7 @@ package io.disys.axis.mvcc.io;
 import io.disys.axis.mvcc.codec.*;
 import io.disys.axis.mvcc.error.*;
 import io.disys.axis.mvcc.model.*;
+import io.disys.axis.mvcc.model.Record;
 import io.disys.axis.mvcc.store.*;
 import io.disys.axis.mvcc.timeline.*;
 
@@ -49,7 +50,7 @@ public class WriteSession implements AutoCloseable {
                 System.nanoTime() >= expiryTime;
     }
 
-    public boolean closeIfExpired() throws IOException {
+    public boolean closeIfExpired() {
         if (expired()) {
             close();
             return true;
@@ -59,7 +60,7 @@ public class WriteSession implements AutoCloseable {
     }
 
     @Override
-    public void close() throws IOException {
+    public void close() {
         txn.put(
                 db.meta(),
                 db.meta().persistedCommitSeqKey(),
@@ -68,7 +69,7 @@ public class WriteSession implements AutoCloseable {
         txn.close();
     }
 
-    public void put(byte[] key, byte[] val, int ordinal) throws IOException {
+    public void put(byte[] key, byte[] val, int ordinal)  {
         var revision = Revision.modify(bound.end() + 1, ordinal);
 
         var timeline = index.add(key, revision);
@@ -80,7 +81,7 @@ public class WriteSession implements AutoCloseable {
         txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
     }
 
-    public boolean delete(byte[] key, int ordinal) throws IOException {
+    public boolean delete(byte[] key, int ordinal) {
         var revision = Revision.modify(bound.end() + 1, ordinal);
         var timeline = index.complete(key, revision);
 
@@ -106,15 +107,15 @@ public class WriteSession implements AutoCloseable {
                 .orElseGet(ReadResult.Absent::new);
     }
 
-    public ReadResult getAt(byte[] key, long commitSeq) throws IOException {
+    public ReadResult getAt(byte[] key, long commitSeq) {
         return null;
     }
 
-    public CloseableIterator<io.disys.axis.mvcc.model.Record> range(byte[] start, byte[] end) {
+    public CloseableIterator<Record> range(byte[] start, byte[] end) {
         return null;
     }
 
-    public void advance() throws IOException {
+    public void advance()  {
         buffer.publish();
         bound.advance();
     }
@@ -129,7 +130,7 @@ public class WriteSession implements AutoCloseable {
         bound.compact(commitSeq);
     }
 
-    public CloseableIterator<io.disys.axis.mvcc.model.Record> rangeAt(byte[] startKey, byte[] endKey, long commitSeq) {
+    public CloseableIterator<Record> rangeAt(byte[] startKey, byte[] endKey, long commitSeq) {
         return null;
     }
 }

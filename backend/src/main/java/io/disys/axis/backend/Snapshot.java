@@ -4,6 +4,6 @@ import java.io.IOException;
 import java.nio.file.Path;
 
 public interface Snapshot extends AutoCloseable {
-    void take() throws IOException;
+    void take();
     long size();
 }

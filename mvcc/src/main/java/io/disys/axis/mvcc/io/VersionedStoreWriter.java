@@ -22,22 +22,22 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
-    public void put(byte[] key, byte[] val) throws IOException {
+    public void put(byte[] key, byte[] val)  {
         session.put(key, val, ordinal++);
     }
 
     @Override
-    public boolean delete(byte[] key) throws IOException {
+    public boolean delete(byte[] key) {
         return session.delete(key, ordinal++);
     }
 
     @Override
-    public ReadResult get(byte[] key) throws IOException {
+    public ReadResult get(byte[] key) {
         return session.get(key);
     }
 
     @Override
-    public ReadResult getAt(byte[] key, long commitSeq) throws IOException {
+    public ReadResult getAt(byte[] key, long commitSeq) {
         return session.getAt(key, commitSeq);
     }
 
@@ -52,7 +52,7 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
-    public void close() throws IOException {
+    public void close() {
         if (ordinal == 0) {
             // nothing written so no need to advance
             return;

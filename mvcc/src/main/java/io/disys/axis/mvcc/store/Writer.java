@@ -12,8 +12,8 @@ import java.io.IOException;
 import java.util.Optional;
 
 public interface Writer extends Reader, AutoCloseable {
-    void put(byte[] key, byte[] val) throws IOException;
-    boolean delete(byte[] key) throws IOException;
+    void put(byte[] key, byte[] val);
+    boolean delete(byte[] key);
     @Override
-    void close() throws IOException;
+    void close();
 }

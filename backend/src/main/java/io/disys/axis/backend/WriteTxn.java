@@ -8,7 +8,7 @@ public interface WriteTxn extends AutoCloseable {
     void delete(Database db, byte[] key);
     Optional<byte[]> get(Database db, byte[] key);
     CloseableIterator<KeyVal> range(Database db, byte[] start, byte[] end);
-    void commit() throws IOException;
+    void commit();
     @Override
-    void close() throws IOException;
+    void close();
 }
