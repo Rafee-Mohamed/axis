@@ -1,6 +1,6 @@
 package io.disys.axis.mvcc.timeline;
 
-import io.disys.axis.mvcc.io.*;
+import io.disys.axis.mvcc.internal.VolatileList;
 import io.disys.axis.mvcc.model.*;
 
 import java.util.Optional;
@@ -65,30 +65,6 @@ public class KeyTimeline {
     public Optional<KeySpan> liveSpan() {
         return liveSpan.isEmpty() ? Optional.empty() : Optional.of(liveSpan);
     }
-
-    private int lowerBoundDead(long commitSeq) {
-        int n = deadSpans.size();
-        int left = 0;
-        int right = n - 1;
-        while (left <= right) {
-            int mid = left + (right - left) / 2;
-            var rev = deadSpans.get(mid).firstRevision();
-            if (rev.compareTo(commitSeq) >= 0) {
-                right = mid - 1;
-            } else {
-                left = mid + 1;
-            }
-        }
-        if (left <= 0 || left >= n) {
-            return left;
-        }
-        var previous = deadSpans.get(left - 1);
-        if (previous.lastRevision().compareTo(commitSeq) >= 0) {
-            return left - 1;
-        }
-        return left;
-    }
-
 
     public Optional<KeyTimelineView> pin(long firstCommitSeq, long lastCommitSeq) {
         if (firstCommitSeq > lastCommitSeq) {
@@ -169,6 +145,40 @@ public class KeyTimeline {
         return liveSpan.compact(commitSeq).map(KeyTimeline::fromLiveSpan);
     }
 
+    public Revision floor() {
+        return liveSpan.isEmpty()
+                ? deadSpans.getLast().lastRevision()
+                : liveSpan.lastRevision();
+    }
+
+    public Optional<Revision> floor(long commitSeq) {
+        var currLiveSpan = liveSpan;
+        if (!currLiveSpan.isEmpty()) {
+            var floor = Query.floorRevision(currLiveSpan.revisions(), commitSeq);
+            if (floor >= 0) {
+                return Optional.of(currLiveSpan.get(floor));
+            }
+        }
+
+        if (deadSpans.isEmpty()) {
+            return Optional.empty();
+        }
+
+        var spanFloor = Query.floorDeadSpan(deadSpans, commitSeq);
+
+        if (spanFloor < 0) {
+            return Optional.empty();
+        }
+
+        var revisions = deadSpans.get(spanFloor).revisions();
+        var floor = Query.floorRevision(revisions, commitSeq);
+        if (floor >= 0) {
+            return Optional.of(revisions.get(floor));
+        }
+
+        return Optional.empty();
+    }
+
     public Optional<KeyTimeline> compact(long commitSeq) {
         if (commitSeq < firstRevision().commitSeq()) {
             return Optional.of(this);
@@ -177,7 +187,7 @@ public class KeyTimeline {
             return Optional.empty();
         }
         int deadCount = deadSpans.size();
-        int spanIdx = deadCount == 0 ? -1 : lowerBoundDead(commitSeq);
+        int spanIdx = deadCount == 0 ? -1 : Query.lowerBoundDeadSpan(deadSpans, commitSeq);
         if (spanIdx < 0 || spanIdx >= deadCount) {
             return compactLive(commitSeq);
         }

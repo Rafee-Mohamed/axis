@@ -3,13 +3,12 @@ package io.disys.axis.mvcc.io;
 import io.disys.axis.mvcc.codec.*;
 import io.disys.axis.mvcc.error.*;
 import io.disys.axis.mvcc.model.*;
+import io.disys.axis.mvcc.model.Record;
 import io.disys.axis.mvcc.store.*;
 import io.disys.axis.mvcc.timeline.*;
 
-import io.disys.axis.backend.CloseableIterator;
 import io.disys.axis.backend.ReadTxn;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Optional;
 
@@ -38,7 +37,6 @@ public class VersionedStoreReader implements Reader {
     // revisions within this bound
     // the reads won't access anything out of this bound
     private final long firstCommitSeq;
-    private final long persistedCommitSeq;
     private final long lastCommitSeq;
 
     private VersionedStoreReader(
@@ -49,7 +47,6 @@ public class VersionedStoreReader implements Reader {
             RecordEncoder encoder,
             RecordDecoder decoder,
             long firstCommitSeq,
-            long persistedCommitSeq,
             long lastCommitSeq
     ) {
         this.db = db;
@@ -59,7 +56,6 @@ public class VersionedStoreReader implements Reader {
         this.encoder = encoder;
         this.decoder = decoder;
         this.firstCommitSeq = firstCommitSeq;
-        this.persistedCommitSeq = persistedCommitSeq;
         this.lastCommitSeq = lastCommitSeq;
     }
 
@@ -80,7 +76,6 @@ public class VersionedStoreReader implements Reader {
             CommitSeqBound bound
     ) {
         var firstCommitSeq = getCommitSeq(txn, db.meta(), db.meta().firstCommitSeqKey());
-        var persistedCommitSeq = getCommitSeq(txn, db.meta(), db.meta().persistedCommitSeqKey());
         var lastCommitSeq = bound.end();
         return new VersionedStoreReader(
                 db,
@@ -90,64 +85,8 @@ public class VersionedStoreReader implements Reader {
                 encoder,
                 decoder,
                 firstCommitSeq,
-                persistedCommitSeq,
                 lastCommitSeq
         );
-    }
-
-    KeyTimelineIndex index() {
-        return index;
-    }
-
-    RecordEncoder encoder() {
-        return encoder;
-    }
-
-    RevisionRecordBuffer.View buffer() {
-        return buffer;
-    }
-
-    RecordDecoder decoder() {
-        return decoder;
-    }
-
-    ReadTxn txn() {
-        return txn;
-    }
-
-    VersionedStore.Db db() {
-        return db;
-    }
-
-
-    private Optional<KeyTimelineView> timeline(byte[] key, long commitSeq) {
-        return index.pin(key, firstCommitSeq, commitSeq);
-    }
-
-    private Optional<KeyTimelineView> timeline(byte[] key) {
-        return index.pin(key, firstCommitSeq, lastCommitSeq);
-    }
-
-    ReadResult get(byte[] key, Revision revision) {
-        return buffer.get(revision)
-                .map(RevisionRecord::record)
-                .or(() -> txn.get(db.revision(), encoder.encode(revision))
-                        .map(decoder::decodeRecord))
-                .<ReadResult>map(ReadResult.Present::new)
-                .orElseThrow(() ->
-                        new InconsistentStoreException.MissingRecordForRevision(key, revision, firstCommitSeq, lastCommitSeq));
-    }
-
-    @Override
-    public ReadResult get(byte[] key) {
-        var revision = timeline(key)
-                .flatMap(KeyTimelineView::floor);
-
-        if (revision.isEmpty()) {
-            return new ReadResult.Absent();
-        }
-
-        return get(key, revision.get());
     }
 
     private boolean compacted(long commitSeq) {
@@ -157,6 +96,22 @@ public class VersionedStoreReader implements Reader {
     private boolean future(long commitSeq) {
         return commitSeq > lastCommitSeq;
     }
+
+    Record get(byte[] key, Revision revision) {
+        return buffer.get(revision)
+                .map(RevisionRecord::record)
+                .or(() -> txn.get(db.revision(), encoder.encode(revision))
+                        .map(decoder::decodeRecord))
+                .orElseThrow(() ->
+                        new InconsistentStoreException.MissingRecordForRevision(key, revision, firstCommitSeq, lastCommitSeq));
+    }
+
+    @Override
+    public Optional<Record> get(byte[] key) {
+        return index.revision(key, firstCommitSeq, lastCommitSeq)
+                .map(r -> get(key, r));
+    }
+
 
     @Override
     public ReadResult getAt(byte[] key, long commitSeq) {
@@ -168,24 +123,30 @@ public class VersionedStoreReader implements Reader {
             return new ReadResult.Future(lastCommitSeq, commitSeq);
         }
 
-        var revision = timeline(key)
-                .flatMap(tl -> tl.floor(commitSeq));
+        return index.revision(key, firstCommitSeq, commitSeq)
+                .map(r -> get(key, r))
+                .<ReadResult>map(ReadResult.Present::new)
+                .orElseGet(ReadResult.Absent::new);
+    }
 
-        if (revision.isEmpty()) {
-            return new ReadResult.Absent();
+    @Override
+    public RecordIterator range(byte[] from, byte[] to) {
+        return new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, lastCommitSeq);
+    }
+
+    @Override
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq) {
+        if (compacted(commitSeq)) {
+            return new RangeResult.Compacted(firstCommitSeq, commitSeq);
         }
 
-        return get(key, revision.get());
-    }
+        if (future(commitSeq)) {
+            return new RangeResult.Future(lastCommitSeq, commitSeq);
+        }
 
-    @Override
-    public CloseableIterator<io.disys.axis.mvcc.model.Record> range(byte[] key, byte[] val) {
-        return null;
-    }
-
-    @Override
-    public CloseableIterator<io.disys.axis.mvcc.model.Record> rangeAt(byte[] startKey, byte[] endKey, long commitSeq) {
-        return null;
+        return new RangeResult.Range(
+                new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq)
+        );
     }
 
     @Override

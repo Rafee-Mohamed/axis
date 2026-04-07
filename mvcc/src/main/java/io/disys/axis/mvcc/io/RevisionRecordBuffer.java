@@ -1,10 +1,8 @@
 package io.disys.axis.mvcc.io;
 
-import io.disys.axis.mvcc.codec.*;
-import io.disys.axis.mvcc.error.*;
+import io.disys.axis.mvcc.internal.Search;
+import io.disys.axis.mvcc.internal.VolatileList;
 import io.disys.axis.mvcc.model.*;
-import io.disys.axis.mvcc.store.*;
-import io.disys.axis.mvcc.timeline.*;
 
 import java.util.Optional;
 
@@ -31,7 +29,7 @@ public final class RevisionRecordBuffer {
     void checkMonotonic(RevisionRecord record) {
         var last = records.getLogicalLast();
         if (last != null && record.compareTo(last.revision()) <= 0) {
-            throw new IllegalStateException(
+            throw new IllegalArgumentException(
                     "RevisionRecord's revision is not after the buffer's last revision");
         }
     }
@@ -64,10 +62,20 @@ public final class RevisionRecordBuffer {
             if (isEmpty()) {
                 return Optional.empty();
             }
-            int idx = search(pin, target, from, to);
-            return idx >= 0 ? Optional.of(pin.get(idx)) : Optional.empty();
+            int pos = Search.find(idx -> pin.get(idx).revision(), from, to, target);
+            return pos >= 0 ? Optional.of(pin.get(pos)) : Optional.empty();
         }
     }
+
+    public Optional<RevisionRecord> get(Revision target) {
+        var left = 0;
+        var right = records.size() - 1;
+
+        int pos = Search.find(idx -> records.get(idx).revision(), left, right, target);
+        return pos >= 0 ? Optional.of(records.get(pos)) : Optional.empty();
+    }
+
+
 
     public View emptyView() {
         return new View(null, -1, -1);
@@ -79,59 +87,34 @@ public final class RevisionRecordBuffer {
         }
 
         var pin = records.pin();
-        if (pin.size() == 0) {
+        if (pin.isEmpty()) {
             return emptyView();
         }
 
-        if (pin.getLast().compareTo(new Revision(startSeq, 0)) < 0
-                || pin.getFirst().compareTo(new Revision(endSeq, 0)) > 0) {
+        if (pin.getLast().compareTo(startSeq) < 0
+                || pin.getFirst().compareTo(endSeq) > 0) {
             return emptyView();
         }
 
-        int start = lowerBound(pin, new Revision(startSeq, 0));
-        int end = lowerBound(pin, new Revision(endSeq + 1, 0));
+        int start = lowerBound(pin,startSeq);
+        // to capture up to the last ordinal of endSeq,
+        // therefore searching for next one. last ordinal
+        // ends at end - 1
+        int end = lowerBound(pin, endSeq + 1);
 
         return new View(pin, start, end - 1);
     }
 
-    private static int lowerBound(
+    private int lowerBound(
             VolatileList<RevisionRecord>.PinnedView pin,
-            Revision target
+            long commitSeq
     ) {
-
-        var left = 0;
-        var right = pin.size() - 1;
-
-        while (left <= right) {
-            int mid = left + (right - left) / 2;
-            if (pin.get(mid).compareTo(target) >= 0) {
-                right = mid - 1;
-            } else {
-                left = mid + 1;
-            }
-        }
-        return left;
-    }
-
-    private static int search(
-            VolatileList<RevisionRecord>.PinnedView pin,
-            Revision target,
-            int left,
-            int right
-    ) {
-        while (left <= right) {
-            int mid = left + (right - left) / 2;
-            int cmp = pin.get(mid).compareTo(target);
-            if (cmp == 0) {
-                return mid;
-            }
-            if (cmp > 0) {
-                right = mid - 1;
-            } else {
-                left = mid + 1;
-            }
-        }
-        return -1;
+        return Search.lowerBound(
+                (idx, otherCommitSeq) -> pin.get(idx).compareTo(otherCommitSeq),
+                0,
+                pin.size() - 1,
+                commitSeq
+       );
     }
 
 }

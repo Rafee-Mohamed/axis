@@ -1,11 +1,9 @@
 package io.disys.axis.mvcc.timeline;
 
-import io.disys.axis.mvcc.io.*;
+import io.disys.axis.mvcc.internal.VolatileList;
 import io.disys.axis.mvcc.model.*;
 
-import java.util.List;
 import java.util.Optional;
-import java.util.function.Function;
 
 public class KeyTimelineView {
 
@@ -34,14 +32,14 @@ public class KeyTimelineView {
             return deadSpans.get(spanTo).get(revTo);
         }
 
-        Optional<Revision> floor(Revision revision) {
-            var spanFloor = KeyTimelineView.floor(idx -> deadSpans.get(idx).firstRevision(), spanFrom, spanTo, revision);
+        Optional<Revision> floor(long commitSeq) {
+            var spanFloor = Query.floorDeadSpan(deadSpans, spanFrom, spanTo, commitSeq);
             if (spanFloor < 0) {
                 return Optional.empty();
             }
             var span = deadSpans.get(spanFloor);
 
-            var floor = KeyTimelineView.floor(span::get, revFromIdx(spanFloor), revToIdx(spanFloor), revision);
+            var floor = Query.floorRevision(span.revisions(), revFromIdx(spanFloor), revToIdx(spanFloor), commitSeq);
 
             if (floor < 0) {
                 return Optional.empty();
@@ -56,8 +54,8 @@ public class KeyTimelineView {
             return liveSpan.get(to);
         }
 
-        Optional<Revision> floor(Revision revision) {
-            var floor = KeyTimelineView.floor(liveSpan::get, from, to, revision);
+        Optional<Revision> floor(long commitSeq) {
+            var floor = Query.floorRevision(liveSpan, from, to, commitSeq);
             if (floor < 0) {
                 return Optional.empty();
             }
@@ -70,18 +68,12 @@ public class KeyTimelineView {
     // Checked by KeyTimeline
 
     static Optional<KeyTimelineView> pinDead(VolatileList<DeadSpan>.PinnedView deadSpans, int position, long firstCommitSeq, long lastCommitSeq) {
-        var firstRevision = Revision.create(firstCommitSeq);
-        var lastRevision = new Revision(lastCommitSeq, 0);
-
-        return deadSpansView(deadSpans, position, firstRevision, lastRevision)
+        return deadSpansView(deadSpans, position, firstCommitSeq, lastCommitSeq)
                 .map(dsv -> new KeyTimelineView(Optional.of(dsv), Optional.empty()));
     }
 
     static Optional<KeyTimelineView> pinLive(VolatileList<Revision>.PinnedView liveSpan, long firstCommitSeq, long lastCommitSeq) {
-        var firstRevision = Revision.create(firstCommitSeq);
-        var lastRevision = new Revision(lastCommitSeq, 0);
-
-        return liveSpanView(liveSpan, firstRevision, lastRevision)
+        return liveSpanView(liveSpan, firstCommitSeq, lastCommitSeq)
                 .map(lsv -> new KeyTimelineView(Optional.empty(), Optional.of(lsv)));
     }
 
@@ -92,11 +84,8 @@ public class KeyTimelineView {
             long lastCommitSeq
     ) {
 
-        var firstRevision = Revision.create(firstCommitSeq);
-        var lastRevision = new Revision(lastCommitSeq, 0);
-
-        var dsv = deadSpansView(deadSpans, deadSpans.size() - 1, firstRevision, lastRevision);
-        var lsv = liveSpanView(liveSpan, firstRevision, lastRevision);
+        var dsv = deadSpansView(deadSpans, deadSpans.size() - 1, firstCommitSeq, lastCommitSeq);
+        var lsv = liveSpanView(liveSpan, firstCommitSeq, lastCommitSeq);
 
         if (dsv.isEmpty() && lsv.isEmpty()) {
             return Optional.empty();
@@ -106,14 +95,14 @@ public class KeyTimelineView {
 
     }
     
-    static Optional<LiveSpanView> liveSpanView(VolatileList<Revision>.PinnedView liveSpan, Revision firstRevision, Revision lastRevision) {
-        var revFrom = lowerBoundRevisions(liveSpan, firstRevision);
+    static Optional<LiveSpanView> liveSpanView(VolatileList<Revision>.PinnedView liveSpan, long firstCommitSeq, long lastCommitSeq) {
+        var revFrom = Query.lowerBoundRevision(liveSpan, firstCommitSeq);
 
         if (revFrom >= liveSpan.size()) {
             return Optional.empty();
         }
 
-        var revTo = floorRevisions(liveSpan, lastRevision);
+        var revTo = Query.floorRevision(liveSpan, lastCommitSeq);
 
         if (revTo < 0 || revFrom > revTo) {
             return Optional.empty();
@@ -122,13 +111,13 @@ public class KeyTimelineView {
         return Optional.of(new LiveSpanView(liveSpan, revFrom, revTo));
     }
     
-    static Optional<DeadSpansView> deadSpansView(VolatileList<DeadSpan>.PinnedView deadSpans, int position, Revision firstRevision, Revision lastRevision) {
-        var spanFrom = lowerBoundDeadSpans(deadSpans, position, firstRevision);
+    static Optional<DeadSpansView> deadSpansView(VolatileList<DeadSpan>.PinnedView deadSpans, int position, long firstCommitSeq, long lastCommitSeq) {
+        var spanFrom = Query.lowerBoundDeadSpan(deadSpans, position, firstCommitSeq);
         if (spanFrom > position) {
             return Optional.empty();
         }
 
-        var spanTo = floorDeadSpans(deadSpans, position, lastRevision);
+        var spanTo = Query.floorDeadSpan(deadSpans, position, lastCommitSeq);
 
         // Case: spanFrom > spanTo
 
@@ -149,8 +138,8 @@ public class KeyTimelineView {
             return Optional.empty();
         }
 
-        var revFrom = lowerBoundRevisions(deadSpans.get(spanFrom).revisions(), firstRevision);
-        var revTo = floorRevisions(deadSpans.get(spanTo).revisions(), lastRevision);
+        var revFrom = Query.lowerBoundRevision(deadSpans.get(spanFrom).revisions(), firstCommitSeq);
+        var revTo = Query.floorRevision(deadSpans.get(spanTo).revisions(), lastCommitSeq);
 
 
 
@@ -164,75 +153,17 @@ public class KeyTimelineView {
         
         return Optional.of(new DeadSpansView(deadSpans, spanFrom, spanTo, revFrom, revTo));
     }
+    
 
-    static <T extends Comparable<T>> int lowerBound(Function<Integer, T> get, int left, int right, T t) {
-
-        while (left <= right) {
-            var mid = left + (right - left) / 2;
-            var item = get.apply(mid);
-
-            if (item.compareTo(t) >= 0) {
-                right = mid - 1;
-            } else {
-                left = mid + 1;
-            }
-        }
-
-        return left;
-    }
-
-    static <T extends Comparable<T>> int floor(Function<Integer, T> get, int left, int right, T t) {
-
-        while (left <= right) {
-            var mid = left + (right - left) / 2;
-            var item = get.apply(mid);
-
-            if (item.compareTo(t) <= 0) {
-                left = mid + 1;
-            } else {
-                right = mid - 1;
-            }
-        }
-
-        return right;
-    }
-
-    static int lowerBoundDeadSpans(VolatileList<DeadSpan>.PinnedView deadSpans, int right, Revision revision) {
-        return lowerBound(idx -> deadSpans.get(idx).lastRevision(), 0, right, revision);
-    }
-
-
-    static int floorDeadSpans(VolatileList<DeadSpan>.PinnedView deadSpans, int right, Revision revision) {
-        return floor(idx -> deadSpans.get(idx).firstRevision(), 0, right, revision);
-    }
-
-    static int lowerBoundRevisions(VolatileList<Revision>.PinnedView revisions, Revision revision) {
-        return lowerBound(revisions::get, 0, revisions.size() - 1, revision);
-    }
-
-    static int floorRevisions(VolatileList<Revision>.PinnedView revisions, Revision revision) {
-        return floor(revisions::get, 0, revisions.size() - 1, revision);
-    }
-
-    static int lowerBoundRevisions(List<Revision> revisions, Revision revision) {
-        return lowerBound(revisions::get, 0, revisions.size() - 1, revision);
-    }
-
-    static int floorRevisions(List<Revision> revisions, Revision revision) {
-        return floor(revisions::get, 0, revisions.size() - 1, revision);
-    }
-
-
-    public Optional<Revision> floor() {
+    public Revision floor() {
         return lsv.map(LiveSpanView::floor)
-                .or(() -> dsv.map(DeadSpansView::floor));
+                .or(() -> dsv.map(DeadSpansView::floor))
+                .get();
     }
 
     public Optional<Revision> floor(long commitSeq) {
-        var revision = Revision.create(commitSeq);
-
-        return lsv.flatMap(lsv -> lsv.floor(revision))
-                .or(() -> dsv.flatMap(dsv -> dsv.floor(revision)));
+        return lsv.flatMap(lsv -> lsv.floor(commitSeq))
+                .or(() -> dsv.flatMap(dsv -> dsv.floor(commitSeq)));
 
     }
 }

@@ -1,14 +1,8 @@
 package io.disys.axis.mvcc.io;
 
-import io.disys.axis.mvcc.codec.*;
-import io.disys.axis.mvcc.error.*;
-import io.disys.axis.mvcc.model.*;
 import io.disys.axis.mvcc.store.*;
-import io.disys.axis.mvcc.timeline.*;
+import io.disys.axis.mvcc.model.Record;
 
-import io.disys.axis.backend.CloseableIterator;
-
-import java.io.IOException;
 import java.util.Optional;
 
 public class VersionedStoreWriter implements Writer {
@@ -32,7 +26,7 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
-    public ReadResult get(byte[] key) {
+    public Optional<Record> get(byte[] key) {
         return session.get(key);
     }
 
@@ -42,13 +36,13 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
-    public CloseableIterator<io.disys.axis.mvcc.model.Record> range(byte[] key, byte[] val) {
-        return session.range(key, val);
+    public RecordIterator range(byte[] start, byte[] end) {
+        return session.range(start, end);
     }
 
     @Override
-    public CloseableIterator<io.disys.axis.mvcc.model.Record> rangeAt(byte[] startKey, byte[] endKey, long commitSeq) {
-        return session.rangeAt(startKey, endKey, commitSeq);
+    public RangeResult rangeAt(byte[] start, byte[] end, long commitSeq) {
+        return session.rangeAt(start, end, commitSeq);
     }
 
     @Override

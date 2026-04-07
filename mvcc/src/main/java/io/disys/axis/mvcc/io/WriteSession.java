@@ -12,6 +12,7 @@ import io.disys.axis.backend.WriteTxn;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 public class WriteSession implements AutoCloseable {
@@ -69,13 +70,21 @@ public class WriteSession implements AutoCloseable {
         txn.close();
     }
 
+    private boolean compacted(long commitSeq) {
+        return commitSeq < bound.start();
+    }
+
+    private boolean future(long commitSeq) {
+        return commitSeq > bound.end() + 1;
+    }
+
     public void put(byte[] key, byte[] val, int ordinal)  {
         var revision = Revision.modify(bound.end() + 1, ordinal);
 
         var timeline = index.add(key, revision);
         var span = timeline.lastSpan();
 
-        var record = new io.disys.axis.mvcc.model.Record(key, val, span);
+        var record = new Record(key, val, span);
         buffer.stage(new RevisionRecord(revision, record));
 
         txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
@@ -90,7 +99,7 @@ public class WriteSession implements AutoCloseable {
         }
 
         var span = timeline.get().lastSpan();
-        var record = new io.disys.axis.mvcc.model.Record(key, span);
+        var record = new Record(key, span);
 
         buffer.stage(new RevisionRecord(revision, record));
         txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
@@ -98,21 +107,39 @@ public class WriteSession implements AutoCloseable {
         return true;
     }
 
-    public ReadResult get(byte[] key) {
-        var timeline = index.get(key);
-        return timeline.flatMap(
-                keyTimeline -> txn.get(db.revision(), encoder.encode(keyTimeline.lastRevision()))
+    Record get(byte[] key, Revision revision) {
+        return buffer.get(revision)
+                .map(RevisionRecord::record)
+                .or(() -> txn.get(db.revision(), encoder.encode(revision))
                         .map(decoder::decodeRecord))
+                .orElseThrow(() ->
+                        new InconsistentStoreException.MissingRecordForRevision(key, revision, bound.start(), bound.end()));
+    }
+
+    public Optional<Record> get(byte[] key) {
+        return index.get(key)
+                .map(KeyTimeline::floor)
+                .map(r -> get(key, r));
+    }
+
+    public ReadResult getAt(byte[] key, long commitSeq) {
+        if (compacted(commitSeq)) {
+            return new ReadResult.Compacted(bound.start(), commitSeq);
+        }
+
+        if (future(commitSeq)) {
+            return new ReadResult.Future(bound.end(), commitSeq);
+        }
+
+        return index.revision(key, commitSeq)
+                .map(r -> get(key, r))
                 .<ReadResult>map(ReadResult.Present::new)
                 .orElseGet(ReadResult.Absent::new);
     }
 
-    public ReadResult getAt(byte[] key, long commitSeq) {
-        return null;
-    }
 
-    public CloseableIterator<Record> range(byte[] start, byte[] end) {
-        return null;
+    public RecordIterator range(byte[] from, byte[] to) {
+        return new WriterRecordIterator(this, index.range(from, to), bound.end() + 1);
     }
 
     public void advance()  {
@@ -130,7 +157,17 @@ public class WriteSession implements AutoCloseable {
         bound.compact(commitSeq);
     }
 
-    public CloseableIterator<Record> rangeAt(byte[] startKey, byte[] endKey, long commitSeq) {
-        return null;
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq) {
+        if (compacted(commitSeq)) {
+            return new RangeResult.Compacted(bound.start(), commitSeq);
+        }
+
+        if (future(commitSeq)) {
+            return new RangeResult.Future(bound.end() + 1, commitSeq);
+        }
+
+        return new RangeResult.Range(
+                new WriterRecordIterator(this, index.range(from, to), commitSeq)
+        );
     }
 }

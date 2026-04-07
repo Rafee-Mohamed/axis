@@ -1,12 +1,12 @@
 package io.disys.axis.mvcc.timeline;
 
-import io.disys.axis.mvcc.io.*;
+import io.disys.axis.mvcc.internal.VolatileList;
 import io.disys.axis.mvcc.model.*;
 
 import java.util.Optional;
 
 public class LiveSpan implements KeySpan {
-    private final VolatileList<Revision> revisions; 
+    private final VolatileList<Revision> revisions;
     private final int position; 
     private long createdAt; 
     private int version;
@@ -31,6 +31,8 @@ public class LiveSpan implements KeySpan {
     }
 
     int position() { return position; }
+
+    VolatileList<Revision> revisions() { return revisions; }
 
     VolatileList<Revision>.PinnedView pin() {
         return revisions.pin();
@@ -87,26 +89,9 @@ public class LiveSpan implements KeySpan {
         return DeadSpan.create(nextDeadSpan, createdAt, version);
     }
 
-    int lowerBound(long commitSeq) {
-        var left = 0;
-        var right = revisions.size() - 1;
-
-        while (left <= right) {
-            var mid = left + (right - left) / 2;
-            var rev = revisions.get(mid);
-
-            if (rev.compareTo(commitSeq) >= 0) {
-                right = mid - 1;
-            } else {
-                left = mid + 1;
-            }
-        }
-
-        return left;
-    }
 
     Optional<LiveSpan> compact(long commitSeq) {
-        var lb = lowerBound(commitSeq);
+        var lb = Query.lowerBoundRevision(revisions, commitSeq);
 
         if (lb <= 0) {
             return Optional.of(this);

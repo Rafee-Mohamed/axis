@@ -51,26 +51,9 @@ public record DeadSpan(List<Revision> revisions, long createdAt, int version) im
         return revisions.size();
     }
 
-    int lowerBound(long commitSeq) {
-        var left = 0;
-        var right = revisions.size() - 1;
-
-        while (left <= right) {
-            var mid = left + (right - left) / 2;
-            var rev = revisions.get(mid);
-
-            if (rev.compareTo(commitSeq) >= 0) {
-                right = mid - 1;
-            } else {
-                left = mid + 1;
-            }
-        }
-
-        return left;
-    }
 
     Optional<DeadSpan> compact(long commitSeq) {
-        var lb = lowerBound(commitSeq);
+        var lb = Query.lowerBoundRevision(revisions, commitSeq);
 
         if (lb <= 0) {
             return Optional.of(this);

@@ -16,9 +16,28 @@ public class KeyTimelineIndex {
         return Optional.ofNullable(index.get(key));
     }
 
-    public Optional<KeyTimelineView> pin(byte[] key, long firstCommitSeq, long lastCommitSeq) {
+    public Optional<Revision> revision(byte[] key, long firstCommitSeq, long lastCommitSeq) {
         return Optional.ofNullable(index.get(key))
-                .flatMap(t -> t.pin(firstCommitSeq, lastCommitSeq));
+                .flatMap(t -> t.pin(firstCommitSeq, lastCommitSeq))
+                .map(KeyTimelineView::floor);
+    }
+
+    public Optional<Revision> revision(byte[] key) {
+        return Optional.ofNullable(index.get(key))
+                .map(KeyTimeline::floor);
+    }
+
+    public Optional<Revision> revision(byte[] key, long lastCommitSeq) {
+        return Optional.ofNullable(index.get(key))
+                .flatMap(t -> t.floor(lastCommitSeq));
+    }
+
+    public Iterator<KeyTimelineEntry> range(byte[] from, byte[] to) {
+        return index.subMap(from, to)
+                .entrySet()
+                .stream()
+                .map(e -> new KeyTimelineEntry(e.getKey(), e.getValue()))
+                .iterator();
     }
 
     public KeyTimeline add(byte[] key, Revision revision) {

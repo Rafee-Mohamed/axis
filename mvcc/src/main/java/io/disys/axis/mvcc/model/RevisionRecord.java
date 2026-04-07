@@ -9,4 +9,8 @@ public record RevisionRecord(
         return revision.compareTo(o);
     }
 
+    public int compareTo(long commitSeq) {
+        return revision.compareTo(commitSeq);
+    }
+
 }
