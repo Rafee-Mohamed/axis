@@ -41,8 +41,38 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
+    public RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
+        return session.range(from, to, bound);
+    }
+
+    @Override
+    public RecordIterator range(byte[] from, byte[] to, long limit) {
+        return session.range(from, to, limit);
+    }
+
+    @Override
+    public RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound bound, long limit) {
+        return session.range(from, to, bound, limit);
+    }
+
+    @Override
     public RangeResult rangeAt(byte[] start, byte[] end, long commitSeq) {
         return session.rangeAt(start, end, commitSeq);
+    }
+
+    @Override
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
+        return session.rangeAt(from, to, commitSeq, bound);
+    }
+
+    @Override
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
+        return  session.rangeAt(from, to, commitSeq, limit);
+    }
+
+    @Override
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
+        return session.rangeAt(from, to, commitSeq, bound, limit);
     }
 
     @Override

@@ -7,8 +7,14 @@ import java.util.Optional;
 public interface Reader extends AutoCloseable {
     Optional<Record> get(byte[] key);
     ReadResult getAt(byte[] key, long commitSeq);
-    RecordIterator range(byte[] startKey, byte[] endKey);
-    RangeResult rangeAt(byte[] startKey, byte[] endKey, long commitSeq);
+    RecordIterator range(byte[] from, byte[] to);
+    RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound bound);
+    RecordIterator range(byte[] from, byte[] to, long limit);
+    RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound bound, long limit);
+    RangeResult rangeAt(byte[] from, byte[] to, long commitSeq);
+    RangeResult rangeAt(byte[] from, byte[] to, long commitSeq,  ModifiedAtSeqBound bound);
+    RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, long limit);
+    RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit);
     @Override
     void close();
 }

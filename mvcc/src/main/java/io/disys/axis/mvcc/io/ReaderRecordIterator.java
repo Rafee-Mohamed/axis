@@ -8,22 +8,66 @@ import io.disys.axis.mvcc.timeline.KeyTimelineView;
 
 import java.util.Iterator;
 import java.util.NoSuchElementException;
+import java.util.function.Predicate;
 
 public class ReaderRecordIterator implements RecordIterator {
     private final Iterator<KeyTimelineEntry> timelines;
     private final VersionedStoreReader reader;
     private final long firstCommitSeq;
     private final long lastCommitSeq;
+    private final Predicate<Revision> filter;
+    private long remaining;
     private byte[] key;
     private Revision revision;
 
-    public ReaderRecordIterator(VersionedStoreReader reader, Iterator<KeyTimelineEntry> timelines, long firstCommitSeq, long lastCommitSeq) {
+
+    public ReaderRecordIterator(
+            VersionedStoreReader reader,
+            Iterator<KeyTimelineEntry> timelines,
+            long firstCommitSeq,
+            long lastCommitSeq,
+            Predicate<Revision> revisionFilter,
+            long limit
+    ) {
         this.timelines = timelines;
         this.reader = reader;
         this.key = null;
         this.revision = null;
         this.firstCommitSeq = firstCommitSeq;
         this.lastCommitSeq = lastCommitSeq;
+        this.filter = revisionFilter;
+        this.remaining = limit;
+    }
+
+
+    public ReaderRecordIterator(
+            VersionedStoreReader reader,
+            Iterator<KeyTimelineEntry> timelines,
+            long firstCommitSeq,
+            long lastCommitSeq,
+            Predicate<Revision> revisionFilter
+    ) {
+        this(reader, timelines, firstCommitSeq, lastCommitSeq, revisionFilter, Long.MAX_VALUE);
+    }
+
+    public ReaderRecordIterator(
+            VersionedStoreReader reader,
+            Iterator<KeyTimelineEntry> timelines,
+            long firstCommitSeq,
+            long lastCommitSeq,
+            long limit
+    ) {
+        this(reader, timelines, firstCommitSeq, lastCommitSeq, (_) -> true, limit);
+    }
+
+
+    public ReaderRecordIterator(
+            VersionedStoreReader reader,
+            Iterator<KeyTimelineEntry> timelines,
+            long firstCommitSeq,
+            long lastCommitSeq
+    ) {
+        this(reader, timelines, firstCommitSeq, lastCommitSeq, (_) -> true, Long.MAX_VALUE);
     }
 
     private void updateNext() {
@@ -34,12 +78,16 @@ public class ReaderRecordIterator implements RecordIterator {
                     .timeline()
                     .pin(firstCommitSeq, lastCommitSeq)
                     .map(KeyTimelineView::floor)
+                    .filter(filter)
                     .orElse(null);
         }
     }
 
     @Override
     public boolean hasNext() {
+        if (remaining <= 0) {
+            return false;
+        }
         updateNext();
         return revision != null;
     }
@@ -53,6 +101,7 @@ public class ReaderRecordIterator implements RecordIterator {
         var next = reader.get(key, revision);
         revision = null;
         key = null;
+        remaining--;
 
         return next;
     }

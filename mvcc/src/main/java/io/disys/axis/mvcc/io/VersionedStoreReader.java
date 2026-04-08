@@ -135,6 +135,21 @@ public class VersionedStoreReader implements Reader {
     }
 
     @Override
+    public RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
+        return new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, lastCommitSeq, bound);
+    }
+
+    @Override
+    public RecordIterator range(byte[] from, byte[] to, long limit) {
+        return new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, lastCommitSeq, limit);
+    }
+
+    @Override
+    public RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound bound, long limit) {
+        return new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, lastCommitSeq, bound, limit);
+    }
+
+    @Override
     public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq) {
         if (compacted(commitSeq)) {
             return new RangeResult.Compacted(firstCommitSeq, commitSeq);
@@ -146,6 +161,51 @@ public class VersionedStoreReader implements Reader {
 
         return new RangeResult.Range(
                 new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq)
+        );
+    }
+
+    @Override
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
+        if (compacted(commitSeq)) {
+            return new RangeResult.Compacted(firstCommitSeq, commitSeq);
+        }
+
+        if (future(commitSeq)) {
+            return new RangeResult.Future(lastCommitSeq, commitSeq);
+        }
+
+        return new RangeResult.Range(
+                new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq, bound)
+        );
+    }
+
+    @Override
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
+        if (compacted(commitSeq)) {
+            return new RangeResult.Compacted(firstCommitSeq, commitSeq);
+        }
+
+        if (future(commitSeq)) {
+            return new RangeResult.Future(lastCommitSeq, commitSeq);
+        }
+
+        return new RangeResult.Range(
+                new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq, limit)
+        );
+    }
+
+    @Override
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
+        if (compacted(commitSeq)) {
+            return new RangeResult.Compacted(firstCommitSeq, commitSeq);
+        }
+
+        if (future(commitSeq)) {
+            return new RangeResult.Future(lastCommitSeq, commitSeq);
+        }
+
+        return new RangeResult.Range(
+                new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq, bound, limit)
         );
     }
 

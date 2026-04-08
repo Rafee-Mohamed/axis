@@ -7,10 +7,8 @@ import io.disys.axis.mvcc.model.Record;
 import io.disys.axis.mvcc.store.*;
 import io.disys.axis.mvcc.timeline.*;
 
-import io.disys.axis.backend.CloseableIterator;
 import io.disys.axis.backend.WriteTxn;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -78,6 +76,21 @@ public class WriteSession implements AutoCloseable {
         return commitSeq > bound.end() + 1;
     }
 
+    public void advance()  {
+        buffer.publish();
+        bound.advance();
+    }
+
+    public void compact(long commitSeq) {
+        txn.put(
+                db.meta(),
+                db.meta().firstCommitSeqKey(),
+                ByteBuffer.allocate(Long.BYTES)
+                        .putLong(commitSeq)
+                        .array());
+        bound.compact(commitSeq);
+    }
+
     public void put(byte[] key, byte[] val, int ordinal)  {
         var revision = Revision.modify(bound.end() + 1, ordinal);
 
@@ -142,19 +155,16 @@ public class WriteSession implements AutoCloseable {
         return new WriterRecordIterator(this, index.range(from, to), bound.end() + 1);
     }
 
-    public void advance()  {
-        buffer.publish();
-        bound.advance();
+    public RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound) {
+        return new WriterRecordIterator(this, index.range(from, to), bound.end() + 1, modifiedAtSeqBound);
     }
 
-    public void compact(long commitSeq) {
-        txn.put(
-                db.meta(),
-                db.meta().firstCommitSeqKey(),
-                ByteBuffer.allocate(Long.BYTES)
-                        .putLong(commitSeq)
-                        .array());
-        bound.compact(commitSeq);
+    public RecordIterator range(byte[] from, byte[] to, long limit) {
+        return new WriterRecordIterator(this, index.range(from, to), bound.end() + 1, limit);
+    }
+
+    public RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
+        return new WriterRecordIterator(this, index.range(from, to), bound.end() + 1, modifiedAtSeqBound, limit);
     }
 
     public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq) {
@@ -168,6 +178,48 @@ public class WriteSession implements AutoCloseable {
 
         return new RangeResult.Range(
                 new WriterRecordIterator(this, index.range(from, to), commitSeq)
+        );
+    }
+
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
+        if (compacted(commitSeq)) {
+            return new RangeResult.Compacted(bound.start(), commitSeq);
+        }
+
+        if (future(commitSeq)) {
+            return new RangeResult.Future(bound.end() + 1, commitSeq);
+        }
+
+        return new RangeResult.Range(
+                new WriterRecordIterator(this, index.range(from, to), commitSeq, modifiedAtSeqBound)
+        );
+    }
+
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
+        if (compacted(commitSeq)) {
+            return new RangeResult.Compacted(bound.start(), commitSeq);
+        }
+
+        if (future(commitSeq)) {
+            return new RangeResult.Future(bound.end() + 1, commitSeq);
+        }
+
+        return new RangeResult.Range(
+                new WriterRecordIterator(this, index.range(from, to), commitSeq, limit)
+        );
+    }
+
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
+        if (compacted(commitSeq)) {
+            return new RangeResult.Compacted(bound.start(), commitSeq);
+        }
+
+        if (future(commitSeq)) {
+            return new RangeResult.Future(bound.end() + 1, commitSeq);
+        }
+
+        return new RangeResult.Range(
+                new WriterRecordIterator(this, index.range(from, to), commitSeq, modifiedAtSeqBound, limit)
         );
     }
 }
