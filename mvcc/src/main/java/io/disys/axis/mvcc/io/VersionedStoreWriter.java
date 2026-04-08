@@ -31,7 +31,7 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
-    public ReadResult getAt(byte[] key, long commitSeq) {
+    public SnapshotResult<Optional<Record>> getAt(byte[] key, long commitSeq) {
         return session.getAt(key, commitSeq);
     }
 
@@ -56,22 +56,22 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
-    public RangeResult rangeAt(byte[] start, byte[] end, long commitSeq) {
+    public SnapshotResult<RecordIterator> rangeAt(byte[] start, byte[] end, long commitSeq) {
         return session.rangeAt(start, end, commitSeq);
     }
 
     @Override
-    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
+    public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
         return session.rangeAt(from, to, commitSeq, bound);
     }
 
     @Override
-    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
+    public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
         return  session.rangeAt(from, to, commitSeq, limit);
     }
 
     @Override
-    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
+    public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
         return session.rangeAt(from, to, commitSeq, bound, limit);
     }
 
@@ -96,22 +96,22 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
-    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq) {
+    public SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq) {
         return session.keysAt(from, to, commitSeq);
     }
 
     @Override
-    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
+    public SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
         return session.keysAt(from, to, commitSeq, bound);
     }
 
     @Override
-    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, long limit) {
+    public SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq, long limit) {
         return session.keysAt(from, to, commitSeq, limit);
     }
 
     @Override
-    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
+    public SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
         return session.keysAt(from, to, commitSeq, bound, limit);
     }
 
