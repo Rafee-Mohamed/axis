@@ -76,6 +76,46 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
+    public KeyIterator keys(byte[] from, byte[] to) {
+        return session.keys(from, to);
+    }
+
+    @Override
+    public KeyIterator keys(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
+        return session.keys(from, to, bound);
+    }
+
+    @Override
+    public KeyIterator keys(byte[] from, byte[] to, long limit) {
+        return session.keys(from, to, limit);
+    }
+
+    @Override
+    public KeyIterator keys(byte[] from, byte[] to, ModifiedAtSeqBound bound, long limit) {
+        return session.keys(from, to, bound, limit);
+    }
+
+    @Override
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq) {
+        return session.keysAt(from, to, commitSeq);
+    }
+
+    @Override
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
+        return session.keysAt(from, to, commitSeq, bound);
+    }
+
+    @Override
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, long limit) {
+        return session.keysAt(from, to, commitSeq, limit);
+    }
+
+    @Override
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
+        return session.keysAt(from, to, commitSeq, bound, limit);
+    }
+
+    @Override
     public void close() {
         if (ordinal == 0) {
             // nothing written so no need to advance

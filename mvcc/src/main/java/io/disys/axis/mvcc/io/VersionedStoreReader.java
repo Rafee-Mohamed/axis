@@ -149,8 +149,7 @@ public class VersionedStoreReader implements Reader {
         return new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, lastCommitSeq, bound, limit);
     }
 
-    @Override
-    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq) {
+    private RangeResult rangeOutsideVisibleWindow(long commitSeq) {
         if (compacted(commitSeq)) {
             return new RangeResult.Compacted(firstCommitSeq, commitSeq);
         }
@@ -159,54 +158,98 @@ public class VersionedStoreReader implements Reader {
             return new RangeResult.Future(lastCommitSeq, commitSeq);
         }
 
-        return new RangeResult.Range(
+        return null;
+    }
+
+    @Override
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq) {
+        var result = rangeOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new RangeResult.Range(
                 new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq)
         );
     }
 
     @Override
     public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
-        if (compacted(commitSeq)) {
-            return new RangeResult.Compacted(firstCommitSeq, commitSeq);
-        }
-
-        if (future(commitSeq)) {
-            return new RangeResult.Future(lastCommitSeq, commitSeq);
-        }
-
-        return new RangeResult.Range(
+        var result = rangeOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new RangeResult.Range(
                 new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq, bound)
         );
     }
 
     @Override
     public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
-        if (compacted(commitSeq)) {
-            return new RangeResult.Compacted(firstCommitSeq, commitSeq);
-        }
-
-        if (future(commitSeq)) {
-            return new RangeResult.Future(lastCommitSeq, commitSeq);
-        }
-
-        return new RangeResult.Range(
+        var result = rangeOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new RangeResult.Range(
                 new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq, limit)
         );
     }
 
     @Override
     public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
-        if (compacted(commitSeq)) {
-            return new RangeResult.Compacted(firstCommitSeq, commitSeq);
-        }
-
-        if (future(commitSeq)) {
-            return new RangeResult.Future(lastCommitSeq, commitSeq);
-        }
-
-        return new RangeResult.Range(
+        var result = rangeOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new RangeResult.Range(
                 new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq, bound, limit)
         );
+    }
+
+    @Override
+    public KeyIterator keys(byte[] from, byte[] to) {
+        return new ReaderKeyIterator(index.range(from, to), firstCommitSeq, lastCommitSeq);
+    }
+
+    @Override
+    public KeyIterator keys(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
+        return new ReaderKeyIterator(index.range(from, to), firstCommitSeq, lastCommitSeq, bound);
+    }
+
+    @Override
+    public KeyIterator keys(byte[] from, byte[] to, long limit) {
+        return new ReaderKeyIterator(index.range(from, to), firstCommitSeq, lastCommitSeq, limit);
+    }
+
+    @Override
+    public KeyIterator keys(byte[] from, byte[] to, ModifiedAtSeqBound bound, long limit) {
+        return new ReaderKeyIterator(index.range(from, to), firstCommitSeq, lastCommitSeq, bound, limit);
+    }
+
+    private KeyRangeResult keysOutsideVisibleWindow(long commitSeq) {
+        if (compacted(commitSeq)) {
+            return new KeyRangeResult.Compacted(firstCommitSeq, commitSeq);
+        }
+        if (future(commitSeq)) {
+            return new KeyRangeResult.Future(lastCommitSeq, commitSeq);
+        }
+
+        return null;
+    }
+    
+    @Override
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq) {
+        var result = keysOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new KeyRangeResult.Range(
+                new ReaderKeyIterator(index.range(from, to), firstCommitSeq, commitSeq));
+    }
+
+    @Override
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
+        var result = keysOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new KeyRangeResult.Range(
+                new ReaderKeyIterator(index.range(from, to), firstCommitSeq, commitSeq, bound));
+    }
+
+    @Override
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, long limit) {
+        var result = keysOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new KeyRangeResult.Range(
+                new ReaderKeyIterator(index.range(from, to), firstCommitSeq, commitSeq, limit));
+    }
+
+    @Override
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
+        var result = keysOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new KeyRangeResult.Range(
+                new ReaderKeyIterator(index.range(from, to), firstCommitSeq, commitSeq, bound, limit));
     }
 
     @Override

@@ -167,7 +167,7 @@ public class WriteSession implements AutoCloseable {
         return new WriterRecordIterator(this, index.range(from, to), bound.end() + 1, modifiedAtSeqBound, limit);
     }
 
-    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq) {
+    private RangeResult rangeOutsideVisibleWindow(long commitSeq) {
         if (compacted(commitSeq)) {
             return new RangeResult.Compacted(bound.start(), commitSeq);
         }
@@ -176,50 +176,85 @@ public class WriteSession implements AutoCloseable {
             return new RangeResult.Future(bound.end() + 1, commitSeq);
         }
 
-        return new RangeResult.Range(
+        return null;
+    }
+
+    public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq) {
+        var result = rangeOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new RangeResult.Range(
                 new WriterRecordIterator(this, index.range(from, to), commitSeq)
         );
     }
 
     public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
-        if (compacted(commitSeq)) {
-            return new RangeResult.Compacted(bound.start(), commitSeq);
-        }
-
-        if (future(commitSeq)) {
-            return new RangeResult.Future(bound.end() + 1, commitSeq);
-        }
-
-        return new RangeResult.Range(
+        var result = rangeOutsideVisibleWindow(commitSeq);
+        return result != null ? result :  new RangeResult.Range(
                 new WriterRecordIterator(this, index.range(from, to), commitSeq, modifiedAtSeqBound)
         );
     }
 
     public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
-        if (compacted(commitSeq)) {
-            return new RangeResult.Compacted(bound.start(), commitSeq);
-        }
-
-        if (future(commitSeq)) {
-            return new RangeResult.Future(bound.end() + 1, commitSeq);
-        }
-
-        return new RangeResult.Range(
+        var result = rangeOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new RangeResult.Range(
                 new WriterRecordIterator(this, index.range(from, to), commitSeq, limit)
         );
     }
 
     public RangeResult rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
-        if (compacted(commitSeq)) {
-            return new RangeResult.Compacted(bound.start(), commitSeq);
-        }
-
-        if (future(commitSeq)) {
-            return new RangeResult.Future(bound.end() + 1, commitSeq);
-        }
-
-        return new RangeResult.Range(
+        var result = rangeOutsideVisibleWindow(commitSeq);
+        return result != null ? result :  new RangeResult.Range(
                 new WriterRecordIterator(this, index.range(from, to), commitSeq, modifiedAtSeqBound, limit)
         );
+    }
+
+    public KeyIterator keys(byte[] from, byte[] to) {
+        return new WriterKeyIterator(index.range(from, to), bound.end() + 1);
+    }
+
+    public KeyIterator keys(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound) {
+        return new WriterKeyIterator(index.range(from, to), bound.end() + 1, modifiedAtSeqBound);
+    }
+
+    public KeyIterator keys(byte[] from, byte[] to, long limit) {
+        return new WriterKeyIterator(index.range(from, to), bound.end() + 1, limit);
+    }
+
+    public KeyIterator keys(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
+        return new WriterKeyIterator(index.range(from, to), bound.end() + 1, modifiedAtSeqBound, limit);
+    }
+
+    private KeyRangeResult keysOutsideVisibleWindow(long commitSeq) {
+        if (compacted(commitSeq)) {
+            return new KeyRangeResult.Compacted(bound.start(), commitSeq);
+        }
+        if (future(commitSeq)) {
+            return new KeyRangeResult.Future(bound.end() + 1, commitSeq);
+        }
+
+        return null;
+    }
+
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq) {
+        var result = keysOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new KeyRangeResult.Range(
+                new WriterKeyIterator(index.range(from, to), commitSeq));
+    }
+
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
+        var result = keysOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new KeyRangeResult.Range(
+                new WriterKeyIterator(index.range(from, to), commitSeq, modifiedAtSeqBound));
+    }
+
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, long limit) {
+        var result = keysOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new KeyRangeResult.Range(
+                new WriterKeyIterator(index.range(from, to), commitSeq, limit));
+    }
+
+    public KeyRangeResult keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
+        var result = keysOutsideVisibleWindow(commitSeq);
+        return result != null ? result : new KeyRangeResult.Range(
+                new WriterKeyIterator(index.range(from, to), commitSeq, modifiedAtSeqBound, limit));
     }
 }
