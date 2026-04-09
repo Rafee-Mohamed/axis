@@ -240,4 +240,23 @@ public class WriteSession implements AutoCloseable {
         return result != null ? result : new SnapshotResult.Ok<>(
                 new WriterKeyIterator(index.range(from, to), commitSeq, modifiedAtSeqBound, limit));
     }
+
+    public long count(byte[] from, byte[] to) {
+        return index.count(from, to);
+    }
+
+    public long count(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
+        return index.count(from, to, bound);
+    }
+
+    public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq) {
+        var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
+        return result != null ? result : new SnapshotResult.Ok<>(index.count(from, to, commitSeq));
+    }
+
+    public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
+        var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
+        return result != null ? result : new SnapshotResult.Ok<>(index.count(from, to, commitSeq, bound));
+    }
+
 }

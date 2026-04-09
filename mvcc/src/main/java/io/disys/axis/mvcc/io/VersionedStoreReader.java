@@ -235,6 +235,28 @@ public class VersionedStoreReader implements Reader {
     }
 
     @Override
+    public long count(byte[] from, byte[] to) {
+        return index.count(from, to, firstCommitSeq, lastCommitSeq);
+    }
+
+    @Override
+    public long count(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
+        return index.count(from, to, firstCommitSeq, lastCommitSeq, bound);
+    }
+
+    @Override
+    public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq) {
+        var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
+        return result != null ? result : new SnapshotResult.Ok<>(index.count(from, to, firstCommitSeq, commitSeq));
+    }
+
+    @Override
+    public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
+        var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
+        return result != null ? result : new SnapshotResult.Ok<>(index.count(from, to, firstCommitSeq, commitSeq, bound));
+    }
+
+    @Override
     public void close() {
         txn.close();
     }

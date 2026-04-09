@@ -28,6 +28,12 @@ public interface Reader extends AutoCloseable {
     SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq, long limit);
     SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit);
 
+    long count(byte[] from, byte[] to);
+    long count(byte[] from, byte[] to, ModifiedAtSeqBound bound);
+
+    SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq);
+    SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound);
+
     @Override
     void close();
 }

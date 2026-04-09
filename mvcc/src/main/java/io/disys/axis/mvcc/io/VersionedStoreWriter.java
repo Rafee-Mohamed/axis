@@ -116,6 +116,26 @@ public class VersionedStoreWriter implements Writer {
     }
 
     @Override
+    public long count(byte[] from, byte[] to) {
+        return session.count(from, to);
+    }
+
+    @Override
+    public long count(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
+        return session.count(from, to, bound);
+    }
+
+    @Override
+    public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq) {
+        return session.countAt(from, to, commitSeq);
+    }
+
+    @Override
+    public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
+        return session.countAt(from, to, commitSeq, bound);
+    }
+
+    @Override
     public void close() {
         if (ordinal == 0) {
             // nothing written so no need to advance
