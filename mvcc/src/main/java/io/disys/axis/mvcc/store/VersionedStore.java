@@ -43,7 +43,7 @@ public class VersionedStore {
         this.session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
     }
 
-    public static VersionedStore restore(Backend backend, VersionedStoreConfig config) throws Exception {
+    public static VersionedStore restore(Backend backend, VersionedStoreConfig config) {
         return new VersionedStore(backend, config);
     }
 
@@ -67,7 +67,7 @@ public class VersionedStore {
 
     // multiple readers allowed, can called by multiple threads to get readers
     public Reader reader() {
-        return VersionedStoreReader.create(db, index, backend.beginRead(), buffer, encoder, decoder, bound);
+        return CommitBoundedReader.create(db, index, backend.beginRead(), buffer, encoder, decoder, bound);
     }
 
     public void renewBuffer() {
@@ -90,8 +90,8 @@ public class VersionedStore {
         // reader. So, while deletion is happening, until the reader lives it can view the
         // data as of this point
 
-        // close the session flushes any writes and along with commit the compaction point as first visible seq
-        session.close();
+        // commit the session flushes any writes and along with commit the compaction point as first visible seq
+        session.commit();
         // after this any reader sees the compaction point as the first visible commit seq
         // and reads within the bound even though the upcoming the buffer and index
         // were not taken for read
@@ -141,13 +141,13 @@ public class VersionedStore {
     }
 
     public void sync() {
-        session.close();
+        session.commit();
         renewBuffer();
         session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
     }
 
     public Writer writer() {
-        if (session.closeIfExpired()) {
+        if (session.commitIfExpired()) {
             // single buffer per session
             // if older readers hold the buffer for read,
             // then mutating the buffer - clear the buffer and use for every session
@@ -162,6 +162,6 @@ public class VersionedStore {
             renewBuffer();
             session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
         }
-        return new VersionedStoreWriter(session);
+        return session;
     }
 }

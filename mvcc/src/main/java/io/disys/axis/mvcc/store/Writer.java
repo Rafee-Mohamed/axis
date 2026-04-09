@@ -14,6 +14,7 @@ import java.util.Optional;
 public interface Writer extends Reader, AutoCloseable {
     void put(byte[] key, byte[] val);
     boolean delete(byte[] key);
+    int deleteRange(byte[] from, byte[] to);
     @Override
     void close();
 }

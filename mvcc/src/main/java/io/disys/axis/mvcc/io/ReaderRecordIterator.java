@@ -12,7 +12,7 @@ import java.util.function.Predicate;
 
 public class ReaderRecordIterator implements RecordIterator {
     private final Iterator<KeyTimelineEntry> timelines;
-    private final VersionedStoreReader reader;
+    private final CommitBoundedReader reader;
     private final long firstCommitSeq;
     private final long lastCommitSeq;
     private final Predicate<Revision> filter;
@@ -22,7 +22,7 @@ public class ReaderRecordIterator implements RecordIterator {
 
 
     public ReaderRecordIterator(
-            VersionedStoreReader reader,
+            CommitBoundedReader reader,
             Iterator<KeyTimelineEntry> timelines,
             long firstCommitSeq,
             long lastCommitSeq,
@@ -41,7 +41,7 @@ public class ReaderRecordIterator implements RecordIterator {
 
 
     public ReaderRecordIterator(
-            VersionedStoreReader reader,
+            CommitBoundedReader reader,
             Iterator<KeyTimelineEntry> timelines,
             long firstCommitSeq,
             long lastCommitSeq,
@@ -51,7 +51,7 @@ public class ReaderRecordIterator implements RecordIterator {
     }
 
     public ReaderRecordIterator(
-            VersionedStoreReader reader,
+            CommitBoundedReader reader,
             Iterator<KeyTimelineEntry> timelines,
             long firstCommitSeq,
             long lastCommitSeq,
@@ -62,7 +62,7 @@ public class ReaderRecordIterator implements RecordIterator {
 
 
     public ReaderRecordIterator(
-            VersionedStoreReader reader,
+            CommitBoundedReader reader,
             Iterator<KeyTimelineEntry> timelines,
             long firstCommitSeq,
             long lastCommitSeq

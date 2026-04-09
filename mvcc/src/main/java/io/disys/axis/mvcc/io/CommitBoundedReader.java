@@ -12,7 +12,7 @@ import io.disys.axis.backend.ReadTxn;
 import java.nio.ByteBuffer;
 import java.util.Optional;
 
-public class VersionedStoreReader implements Reader {
+public class CommitBoundedReader implements Reader {
 
     private final KeyTimelineIndex index;
     private final ReadTxn txn;
@@ -39,7 +39,7 @@ public class VersionedStoreReader implements Reader {
     private final long firstCommitSeq;
     private final long lastCommitSeq;
 
-    private VersionedStoreReader(
+    private CommitBoundedReader(
             VersionedStore.Db db,
             KeyTimelineIndex index,
             ReadTxn txn,
@@ -66,7 +66,7 @@ public class VersionedStoreReader implements Reader {
     }
 
 
-    public static VersionedStoreReader create(
+    public static CommitBoundedReader create(
             VersionedStore.Db db,
             KeyTimelineIndex index,
             ReadTxn txn,
@@ -77,7 +77,7 @@ public class VersionedStoreReader implements Reader {
     ) {
         var firstCommitSeq = getCommitSeq(txn, db.meta(), db.meta().firstCommitSeqKey());
         var lastCommitSeq = bound.end();
-        return new VersionedStoreReader(
+        return new CommitBoundedReader(
                 db,
                 index,
                 txn,

@@ -4,8 +4,10 @@ import io.disys.axis.mvcc.io.*;
 import io.disys.axis.mvcc.model.*;
 import io.disys.axis.mvcc.store.ModifiedAtSeqBound;
 
+import javax.swing.text.html.Option;
 import java.util.*;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 public class KeyTimelineIndex {
     private final SortedMap<byte[], KeyTimeline> index;
@@ -99,12 +101,11 @@ public class KeyTimelineIndex {
     }
 
     public Optional<KeyTimeline> complete(byte[] key, Revision revision) {
-        var keyTimeline = index.computeIfPresent(key, (_, timeline) -> {
-            timeline.complete(revision);
-            return timeline;
-        });
-
-        return Optional.ofNullable(keyTimeline);
+        var timeline = index.get(key);
+        if (timeline.tryComplete(revision)) {
+            return Optional.of(timeline);
+        }
+        return Optional.empty();
     }
 
     public KeyTimelineIndex compact(long commitSeq) {

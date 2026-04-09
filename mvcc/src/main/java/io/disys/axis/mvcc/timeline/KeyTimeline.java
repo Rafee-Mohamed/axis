@@ -37,9 +37,9 @@ public class KeyTimeline {
         liveSpan.add(revision);
     }
 
-    public void complete(Revision revision) {
+    public boolean tryComplete(Revision revision) {
         if (liveSpan.isEmpty()) {
-            throw new IllegalStateException("No alive span to complete");
+            return false;
         }
         
         var nextDeadSpan = liveSpan.complete(revision);
@@ -48,6 +48,8 @@ public class KeyTimeline {
         // read on this interleaving would result in two same spans
         // present in both live and last dead span
         liveSpan = LiveSpan.empty(deadSpans.size());
+
+        return true;
     }
 
     public Revision firstRevision() {
@@ -60,10 +62,6 @@ public class KeyTimeline {
 
     public KeySpan lastSpan() {
         return liveSpan.isEmpty() ? deadSpans.getLast() : liveSpan;
-    }
-
-    public Optional<KeySpan> liveSpan() {
-        return liveSpan.isEmpty() ? Optional.empty() : Optional.of(liveSpan);
     }
 
     public Optional<KeyTimelineView> pin(long firstCommitSeq, long lastCommitSeq) {

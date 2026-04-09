@@ -13,7 +13,7 @@ import java.nio.ByteBuffer;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
-public class WriteSession implements AutoCloseable {
+public class WriteSession implements Writer {
     private final WriteTxn txn;
     private final KeyTimelineIndex index;
     private final RevisionRecordBuffer buffer;
@@ -23,6 +23,7 @@ public class WriteSession implements AutoCloseable {
     private final RecordDecoder decoder;
     private final VersionedStore.Db db;
     private final long expiryTime;
+    private int ordinal;
 
     public WriteSession(
             VersionedStoreConfig config,
@@ -41,6 +42,7 @@ public class WriteSession implements AutoCloseable {
         this.encoder = encoder;
         this.decoder = decoder;
         this.db = db;
+        this.ordinal = 0;
         this.expiryTime = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.revisionRecordBufferSyncTimeout());
     }
 
@@ -49,17 +51,17 @@ public class WriteSession implements AutoCloseable {
                 System.nanoTime() >= expiryTime;
     }
 
-    public boolean closeIfExpired() {
+    public boolean commitIfExpired() {
         if (expired()) {
-            close();
+            commit();
             return true;
         }
 
         return false;
     }
 
-    @Override
-    public void close() {
+    public void commit() {
+        close();
         txn.put(
                 db.meta(),
                 db.meta().persistedCommitSeqKey(),
@@ -68,17 +70,22 @@ public class WriteSession implements AutoCloseable {
         txn.close();
     }
 
+    @Override
+    public void close() {
+        if (ordinal == 0) {
+            return;
+        }
+        ordinal = 0;
+        buffer.publish();
+        bound.advance();
+    }
+
     private boolean compacted(long commitSeq) {
         return commitSeq < bound.start();
     }
 
     private boolean future(long commitSeq) {
         return commitSeq > bound.end() + 1;
-    }
-
-    public void advance()  {
-        buffer.publish();
-        bound.advance();
     }
 
     public void compact(long commitSeq) {
@@ -91,8 +98,9 @@ public class WriteSession implements AutoCloseable {
         bound.compact(commitSeq);
     }
 
-    public void put(byte[] key, byte[] val, int ordinal)  {
-        var revision = Revision.modify(bound.end() + 1, ordinal);
+    @Override
+    public void put(byte[] key, byte[] val)  {
+        var revision = Revision.modify(bound.end() + 1, ordinal++);
 
         var timeline = index.add(key, revision);
         var span = timeline.lastSpan();
@@ -103,8 +111,9 @@ public class WriteSession implements AutoCloseable {
         txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
     }
 
-    public boolean delete(byte[] key, int ordinal) {
-        var revision = Revision.modify(bound.end() + 1, ordinal);
+    @Override
+    public boolean delete(byte[] key) {
+        var revision = Revision.modify(bound.end() + 1, ordinal++);
         var timeline = index.complete(key, revision);
 
         if (timeline.isEmpty()) {
@@ -120,13 +129,36 @@ public class WriteSession implements AutoCloseable {
         return true;
     }
 
+    @Override
+    public int deleteRange(byte[] from, byte[] to) {
+        var revision = new Revision(bound.end() + 1, ordinal);
+        for (var it = index.range(from, to); it.hasNext();) {
+            var entry = it.next();
+
+            if (!entry.timeline().tryComplete(revision)) {
+                continue;
+            }
+
+            var record = new Record(entry.key(), entry.timeline().lastSpan());
+
+            buffer.stage(new RevisionRecord(revision, record));
+            txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
+            revision = revision.next();
+        }
+
+        var deleted = revision.ordinal() - ordinal;
+        ordinal = revision.ordinal();
+        return deleted;
+    }
+
+
     private <T> SnapshotResult<T> snapshotResultOutsideWindow(long commitSeq) {
         if (compacted(commitSeq)) {
-            return new SnapshotResult.Compacted<T>(bound.start(), commitSeq);
+            return new SnapshotResult.Compacted<>(bound.start(), commitSeq);
         }
 
         if (future(commitSeq)) {
-            return new SnapshotResult.Future<T>(bound.end() + 1, commitSeq);
+            return new SnapshotResult.Future<>(bound.end() + 1, commitSeq);
         }
 
         return null;
@@ -142,12 +174,14 @@ public class WriteSession implements AutoCloseable {
                         new InconsistentStoreException.MissingRecordForRevision(key, revision, bound.start(), bound.end()));
     }
 
+    @Override
     public Optional<Record> get(byte[] key) {
         return index.get(key)
                 .map(KeyTimeline::floor)
                 .map(r -> get(key, r));
     }
 
+    @Override
     public SnapshotResult<Optional<Record>> getAt(byte[] key, long commitSeq) {
         var result = this.<Optional<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
@@ -156,23 +190,27 @@ public class WriteSession implements AutoCloseable {
         );
     }
 
+    @Override
     public RecordIterator range(byte[] from, byte[] to) {
         return new WriterRecordIterator(this, index.range(from, to), bound.end() + 1);
     }
 
+    @Override
     public RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound) {
         return new WriterRecordIterator(this, index.range(from, to), bound.end() + 1, modifiedAtSeqBound);
     }
 
+    @Override
     public RecordIterator range(byte[] from, byte[] to, long limit) {
         return new WriterRecordIterator(this, index.range(from, to), bound.end() + 1, limit);
     }
 
+    @Override
     public RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
         return new WriterRecordIterator(this, index.range(from, to), bound.end() + 1, modifiedAtSeqBound, limit);
     }
-    
 
+    @Override
     public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq) {
         var result = this.<RecordIterator>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
@@ -180,6 +218,7 @@ public class WriteSession implements AutoCloseable {
         );
     }
 
+    @Override
     public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
         var result = this.<RecordIterator>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result :  new SnapshotResult.Ok<>(
@@ -187,6 +226,7 @@ public class WriteSession implements AutoCloseable {
         );
     }
 
+    @Override
     public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
         var result = this.<RecordIterator>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
@@ -194,6 +234,7 @@ public class WriteSession implements AutoCloseable {
         );
     }
 
+    @Override
     public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
         var result = this.<RecordIterator>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result :  new SnapshotResult.Ok<>(
@@ -201,59 +242,71 @@ public class WriteSession implements AutoCloseable {
         );
     }
 
+    @Override
     public KeyIterator keys(byte[] from, byte[] to) {
         return new WriterKeyIterator(index.range(from, to), bound.end() + 1);
     }
 
+    @Override
     public KeyIterator keys(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound) {
         return new WriterKeyIterator(index.range(from, to), bound.end() + 1, modifiedAtSeqBound);
     }
 
+    @Override
     public KeyIterator keys(byte[] from, byte[] to, long limit) {
         return new WriterKeyIterator(index.range(from, to), bound.end() + 1, limit);
     }
 
+    @Override
     public KeyIterator keys(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
         return new WriterKeyIterator(index.range(from, to), bound.end() + 1, modifiedAtSeqBound, limit);
     }
-    
+
+    @Override
     public SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq) {
         var result = this.<KeyIterator>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
                 new WriterKeyIterator(index.range(from, to), commitSeq));
     }
 
+    @Override
     public SnapshotResult<KeyIterator>  keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
         var result = this.<KeyIterator>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
                 new WriterKeyIterator(index.range(from, to), commitSeq, modifiedAtSeqBound));
     }
 
+    @Override
     public SnapshotResult<KeyIterator>  keysAt(byte[] from, byte[] to, long commitSeq, long limit) {
         var result = this.<KeyIterator>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
                 new WriterKeyIterator(index.range(from, to), commitSeq, limit));
     }
 
+    @Override
     public SnapshotResult<KeyIterator>  keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
         var result = this.<KeyIterator>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
                 new WriterKeyIterator(index.range(from, to), commitSeq, modifiedAtSeqBound, limit));
     }
 
+    @Override
     public long count(byte[] from, byte[] to) {
         return index.count(from, to);
     }
 
+    @Override
     public long count(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
         return index.count(from, to, bound);
     }
 
+    @Override
     public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq) {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(index.count(from, to, commitSeq));
     }
 
+    @Override
     public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(index.count(from, to, commitSeq, bound));

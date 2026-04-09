@@ -10,6 +10,10 @@ public record Revision(long commitSeq, int ordinal) implements Comparable<Revisi
         return new Revision(commitSeq, ordinal);
     }
 
+    public Revision next() {
+        return new Revision(commitSeq, ordinal + 1);
+    }
+
     @Override
     public int compareTo(Revision other) {
         var cmp = Long.compare(commitSeq, other.commitSeq());
