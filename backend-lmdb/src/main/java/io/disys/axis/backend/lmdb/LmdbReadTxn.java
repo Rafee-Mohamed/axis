@@ -38,6 +38,10 @@ final class LmdbReadTxn implements ReadTxn {
         );
     }
 
+    @Override
+    public CloseableIterator<KeyVal> range(Database db) {
+        return new LmdbClosableIterator(dbs.get(db).iterate(txn));
+    }
 
     @Override
     public void close() {

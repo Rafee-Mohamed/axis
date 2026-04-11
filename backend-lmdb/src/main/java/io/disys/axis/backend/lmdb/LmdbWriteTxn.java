@@ -49,6 +49,11 @@ final class LmdbWriteTxn implements WriteTxn {
     }
 
     @Override
+    public CloseableIterator<KeyVal> range(Database db) {
+        return new LmdbClosableIterator(dbs.get(db).iterate(txn));
+    }
+
+    @Override
     public void commit() {
         txn.commit();
     }
