@@ -8,12 +8,15 @@ import io.disys.axis.mvcc.timeline.*;
 
 import io.disys.axis.backend.Backend;
 import io.disys.axis.backend.Database;
+import io.dsal.persistent.index.core.PersistentBPlusTree;
+import io.dsal.persistent.index.layout.LexigographicPackedByteComparator;
+import io.dsal.persistent.index.layout.PackedByteKeyStorageFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
 public class VersionedStore {
-    private volatile KeyTimelineIndex index;
+    private final KeyTimelineIndex index;
     private final Backend backend;
     private volatile RevisionRecordBuffer buffer;
     private final CommitSeqBound bound;
@@ -32,7 +35,10 @@ public class VersionedStore {
     VersionedStore(Backend backend, VersionedStoreConfig config) {
         this.backend = backend;
         this.config = config;
-        this.index = new KeyTimelineIndex();
+        this.index = new KeyTimelineIndex(new PersistentBPlusTree<>(
+                8,
+                new PackedByteKeyStorageFactory(new LexigographicPackedByteComparator())
+        ));
         this.buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
         this.encoder = new RecordEncoder();
         this.decoder = new RecordDecoder();
@@ -77,6 +83,8 @@ public class VersionedStore {
     // Only single thread access for writer/compact/sync
 
     // Behaviour of concurrent threads accessing these are undefined
+    // compact removes all revisions existed before given commitSeq
+    // that are not present as the point in time view of commitSeq
     public void compact(long commitSeq) {
         if (bound.start() >= commitSeq) {
             return;
@@ -119,14 +127,12 @@ public class VersionedStore {
         renewBuffer();
         // ----- On creating new Reader, during this interleaving
         // Same as the interleaving before, but the buffer will ge empty but index can
-        // have the data - buffer and index swap is not atomic, but that's not the issue
-        // if the reader keeps the read within bound. The index is not concurrently mutated
-        // if done, any reader created in this point reads the index while it is being mutated
-        // resulting in undefined behaviour as concurrently mutating tree structure
-        // So, a new index is created and swapped so any reader will either see the non-compacted
-        // index if read now, or compacted one if read after not the intermediate form.
-        // but the reader should keep the read within bound so as to get consistent results
-        index = index.compact(commitSeq);
+        // have the data - buffer and index compact is not atomic, but that's not an issue
+        // if the reader keeps the read within bound. Any read before compaction point
+        // should be returned with compacted via published compact commitSeq in backend.
+        // The index is concurrently mutated by CoW therefore all readers must view the
+        // consistent state of index at any given point
+        index.compact(commitSeq);
 
         // ----- On creating new Reader, during this interleaving
         // all the readers will see a consistent buffer, index and firstVisibleCommitSeq

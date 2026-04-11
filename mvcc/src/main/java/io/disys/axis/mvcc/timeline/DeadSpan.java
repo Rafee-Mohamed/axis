@@ -53,17 +53,20 @@ public record DeadSpan(List<Revision> revisions, long createdAt, int version) im
 
 
     Optional<DeadSpan> compact(long commitSeq) {
-        var lb = Query.lowerBoundRevision(revisions, commitSeq);
+        var floor = Query.floorRevision(revisions, commitSeq);
 
-        if (lb <= 0) {
+        if (floor < 0) {
             return Optional.of(this);
         }
 
-        if (lb >= revisions.size()) {
+        // if the floor is last of revisions and the commitSeq is behind
+        // the compact commitSeq then that revision does not exist at
+        // compact commitSeq
+        if (floor == revisions.size() - 1 && revisions.getLast().compareTo(commitSeq) < 0) {
             return Optional.empty();
         }
 
-        var compacted = new ArrayList<>(revisions.subList(lb, revisions.size()));
+        var compacted = new ArrayList<>(revisions.subList(floor, revisions.size()));
 
         return Optional.of(new DeadSpan(compacted, createdAt, version));
     }

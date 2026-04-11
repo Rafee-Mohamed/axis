@@ -81,28 +81,22 @@ public final class RevisionRecordBuffer {
         return new View(null, -1, -1);
     }
 
-    public View view(long startSeq, long endSeq) {
-        if (startSeq > endSeq) {
-            throw new IllegalArgumentException("startSeq can't be greater than end Seq");
-        }
-
+    public View view(long endSeq) {
         var pin = records.pin();
         if (pin.isEmpty()) {
             return emptyView();
         }
 
-        if (pin.getLast().compareTo(startSeq) < 0
-                || pin.getFirst().compareTo(endSeq) > 0) {
+        if (pin.getFirst().compareTo(endSeq) > 0) {
             return emptyView();
         }
 
-        int start = lowerBound(pin,startSeq);
         // to capture up to the last ordinal of endSeq,
         // therefore searching for next one. last ordinal
         // ends at end - 1
         int end = lowerBound(pin, endSeq + 1);
 
-        return new View(pin, start, end - 1);
+        return new View(pin, 0, end - 1);
     }
 
     private int lowerBound(

@@ -17,6 +17,10 @@ public class CommitSeqBound {
         return end;
     }
 
+    public long next() {
+        return end + 1;
+    }
+
     public void compact(long commitSeq) {
         start = commitSeq;
     }

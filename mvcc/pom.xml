@@ -23,6 +23,11 @@
             <artifactId>backend</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>io.dsal</groupId>
+            <artifactId>persistent-index</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
     </dependencies>
 
 </project>

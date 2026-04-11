@@ -90,19 +90,20 @@ public class LiveSpan implements KeySpan {
     }
 
 
-    Optional<LiveSpan> compact(long commitSeq) {
-        var lb = Query.lowerBoundRevision(revisions, commitSeq);
+    // compacting live span will always return at least one revision
+    // to answer at commitSeq the revision at the time of commitSeq
+    // needs to be preserved even if the revision's commitSeq is below
+    // the given commitSeq for compact
+    LiveSpan compact(long commitSeq, int position) {
+        var floor = Query.floorRevision(revisions, commitSeq);
 
-        if (lb <= 0) {
-            return Optional.of(this);
+        // if all commitSeq is greater than commitSeq, all of them are queryable
+        if (floor < 0) {
+            return new LiveSpan(revisions, position, createdAt, version);
         }
 
-        if (lb >= revisions.size()) {
-            return Optional.empty();
-        }
+        var compacted = revisions.copy(floor);
 
-        var compacted = revisions.copy(lb);;
-
-        return Optional.of(new LiveSpan(compacted, position, createdAt, version));
+        return new LiveSpan(compacted, position, createdAt, version);
     }
 }

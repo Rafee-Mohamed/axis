@@ -81,7 +81,7 @@ public class CommitBoundedReader implements Reader {
                 db,
                 index,
                 txn,
-                buffer.view(firstCommitSeq, lastCommitSeq),
+                buffer.view(lastCommitSeq),
                 encoder,
                 decoder,
                 firstCommitSeq,
@@ -106,12 +106,6 @@ public class CommitBoundedReader implements Reader {
                         new InconsistentStoreException.MissingRecordForRevision(key, revision, firstCommitSeq, lastCommitSeq));
     }
 
-    @Override
-    public Optional<Record> get(byte[] key) {
-        return index.revision(key, firstCommitSeq, lastCommitSeq)
-                .map(r -> get(key, r));
-    }
-
     private <T> SnapshotResult<T> snapshotResultOutsideWindow(long commitSeq) {
         if (compacted(commitSeq)) {
             return new SnapshotResult.Compacted<T>(firstCommitSeq, commitSeq);
@@ -125,136 +119,197 @@ public class CommitBoundedReader implements Reader {
     }
 
     @Override
+    public Optional<Record> get(byte[] key) {
+        return index.pinnedRevisionAt(key, lastCommitSeq)
+                .map(r -> get(key, r));
+    }
+
+    @Override
     public SnapshotResult<Optional<Record>> getAt(byte[] key, long commitSeq) {
         var result = this.<Optional<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                index.revision(key, firstCommitSeq, commitSeq)
-                .map(r -> get(key, r))
+                index.pinnedRevisionAt(key, commitSeq)
+                        .map(r -> get(key, r))
         );
     }
 
     @Override
-    public RecordIterator range(byte[] from, byte[] to) {
-        return new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, lastCommitSeq);
+    public Iterable<Record> range(byte[] from, byte[] to) {
+        return index.pinnedRangeAt(from, to, lastCommitSeq)
+                .map(kr -> get(kr.key(), kr.revision()))
+                ::iterator;
     }
 
     @Override
-    public RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
-        return new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, lastCommitSeq, bound);
+    public Iterable<Record> range(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound) {
+        return index.pinnedRangeAt(from, to, lastCommitSeq)
+                .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
+                .map(kr -> get(kr.key(), kr.revision()))
+                ::iterator;
     }
 
     @Override
-    public RecordIterator range(byte[] from, byte[] to, long limit) {
-        return new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, lastCommitSeq, limit);
+    public Iterable<Record> range(byte[] from, byte[] to, long limit) {
+        return index.pinnedRangeAt(from, to, lastCommitSeq)
+                .limit(limit)
+                .map(kr -> get(kr.key(), kr.revision()))
+                ::iterator;
     }
 
     @Override
-    public RecordIterator range(byte[] from, byte[] to, ModifiedAtSeqBound bound, long limit) {
-        return new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, lastCommitSeq, bound, limit);
+    public Iterable<Record> range(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
+        return index.pinnedRangeAt(from, to, lastCommitSeq)
+                .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
+                .limit(limit)
+                .map(kr -> get(kr.key(), kr.revision()))
+                ::iterator;
     }
 
     @Override
-    public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq) {
-        var result = this.<RecordIterator>snapshotResultOutsideWindow(commitSeq);
+    public SnapshotResult<Iterable<Record>> rangeAt(byte[] from, byte[] to, long commitSeq) {
+        var result = this.<Iterable<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq)
+                index.pinnedRangeAt(from, to, commitSeq)
+                        .map(kr -> get(kr.key(), kr.revision()))
+                        ::iterator
         );
     }
 
     @Override
-    public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
-        var result = this.<RecordIterator>snapshotResultOutsideWindow(commitSeq);
-        return result != null ? result : new SnapshotResult.Ok<>(
-                new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq, bound)
+    public SnapshotResult<Iterable<Record>> rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
+        var result = this.<Iterable<Record>>snapshotResultOutsideWindow(commitSeq);
+        return result != null ? result :  new SnapshotResult.Ok<>(
+                index.pinnedRangeAt(from, to, commitSeq)
+                        .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
+                        .map(kr -> get(kr.key(), kr.revision()))
+                        ::iterator
         );
     }
 
     @Override
-    public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
-        var result =  this.<RecordIterator>snapshotResultOutsideWindow(commitSeq);
+    public SnapshotResult<Iterable<Record>> rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
+        var result = this.<Iterable<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq, limit)
+                index.pinnedRangeAt(from, to, commitSeq)
+                        .limit(limit)
+                        .map(kr -> get(kr.key(), kr.revision()))
+                        ::iterator
         );
     }
 
     @Override
-    public SnapshotResult<RecordIterator> rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
-        var result = this.<RecordIterator>snapshotResultOutsideWindow(commitSeq);
-        return result != null ? result : new SnapshotResult.Ok<>(
-                new ReaderRecordIterator(this, index.range(from, to), firstCommitSeq, commitSeq, bound, limit)
+    public SnapshotResult<Iterable<Record>> rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
+        var result = this.<Iterable<Record>>snapshotResultOutsideWindow(commitSeq);
+        return result != null ? result :  new SnapshotResult.Ok<>(
+                index.pinnedRangeAt(from, to, commitSeq)
+                        .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
+                        .map(kr -> get(kr.key(), kr.revision()))
+                        ::iterator
         );
     }
 
     @Override
-    public KeyIterator keys(byte[] from, byte[] to) {
-        return new ReaderKeyIterator(index.range(from, to), firstCommitSeq, lastCommitSeq);
+    public Iterable<byte[]> keys(byte[] from, byte[] to) {
+        return index.pinnedRangeAt(from, to, lastCommitSeq)
+                .map(KeyRevision::key)
+                ::iterator;
     }
 
     @Override
-    public KeyIterator keys(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
-        return new ReaderKeyIterator(index.range(from, to), firstCommitSeq, lastCommitSeq, bound);
+    public Iterable<byte[]> keys(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound) {
+        return index.pinnedRangeAt(from, to, lastCommitSeq)
+                .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
+                .map(KeyRevision::key)
+                ::iterator;
     }
 
     @Override
-    public KeyIterator keys(byte[] from, byte[] to, long limit) {
-        return new ReaderKeyIterator(index.range(from, to), firstCommitSeq, lastCommitSeq, limit);
+    public Iterable<byte[]> keys(byte[] from, byte[] to, long limit) {
+        return index.pinnedRangeAt(from, to, lastCommitSeq)
+                .limit(limit)
+                .map(KeyRevision::key)
+                ::iterator;
     }
 
     @Override
-    public KeyIterator keys(byte[] from, byte[] to, ModifiedAtSeqBound bound, long limit) {
-        return new ReaderKeyIterator(index.range(from, to), firstCommitSeq, lastCommitSeq, bound, limit);
+    public Iterable<byte[]> keys(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
+        return index.pinnedRangeAt(from, to, lastCommitSeq)
+                .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
+                .limit(limit)
+                .map(KeyRevision::key)
+                ::iterator;
     }
-    
-    
+
     @Override
-    public SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq) {
-        var result = this.<KeyIterator>snapshotResultOutsideWindow(commitSeq);
+    public SnapshotResult<Iterable<byte[]>> keysAt(byte[] from, byte[] to, long commitSeq) {
+        var result = this.<Iterable<byte[]>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                new ReaderKeyIterator(index.range(from, to), firstCommitSeq, commitSeq));
+                index.pinnedRangeAt(from, to, commitSeq)
+                        .map(KeyRevision::key)
+                        ::iterator
+        );
     }
 
     @Override
-    public SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
-        var result = this.<KeyIterator>snapshotResultOutsideWindow(commitSeq);
+    public SnapshotResult<Iterable<byte[]>>  keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
+        var result = this.<Iterable<byte[]>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                new ReaderKeyIterator(index.range(from, to), firstCommitSeq, commitSeq, bound));
+                index.pinnedRangeAt(from, to, commitSeq)
+                        .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
+                        .map(KeyRevision::key)
+                        ::iterator
+        );
     }
 
     @Override
-    public SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq, long limit) {
-        var result = this.<KeyIterator>snapshotResultOutsideWindow(commitSeq);
+    public SnapshotResult<Iterable<byte[]>>  keysAt(byte[] from, byte[] to, long commitSeq, long limit) {
+        var result = this.<Iterable<byte[]>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                new ReaderKeyIterator(index.range(from, to), firstCommitSeq, commitSeq, limit));
+                index.pinnedRangeAt(from, to, commitSeq)
+                        .limit(limit)
+                        .map(KeyRevision::key)
+                        ::iterator
+        );
     }
 
     @Override
-    public SnapshotResult<KeyIterator> keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound, long limit) {
-        var result = this.<KeyIterator>snapshotResultOutsideWindow(commitSeq);
+    public SnapshotResult<Iterable<byte[]>>  keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
+        var result = this.<Iterable<byte[]>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                new ReaderKeyIterator(index.range(from, to), firstCommitSeq, commitSeq, bound, limit));
+                index.pinnedRangeAt(from, to, commitSeq)
+                        .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
+                        .limit(limit)
+                        .map(KeyRevision::key)
+                        ::iterator
+        );
     }
 
     @Override
     public long count(byte[] from, byte[] to) {
-        return index.count(from, to, firstCommitSeq, lastCommitSeq);
+        return index.pinnedCountAt(from, to, lastCommitSeq).count();
     }
 
     @Override
-    public long count(byte[] from, byte[] to, ModifiedAtSeqBound bound) {
-        return index.count(from, to, firstCommitSeq, lastCommitSeq, bound);
+    public long count(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound) {
+        return index.pinnedCountAt(from, to, lastCommitSeq).filter(modifiedAtSeqBound).count();
     }
 
     @Override
     public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq) {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
-        return result != null ? result : new SnapshotResult.Ok<>(index.count(from, to, firstCommitSeq, commitSeq));
+        return result != null ? result : new SnapshotResult.Ok<>(
+                index.pinnedCountAt(from, to, commitSeq).count()
+        );
     }
 
     @Override
-    public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound) {
+    public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
-        return result != null ? result : new SnapshotResult.Ok<>(index.count(from, to, firstCommitSeq, commitSeq, bound));
+        return result != null ? result : new SnapshotResult.Ok<>(
+                index.pinnedCountAt(from, to, commitSeq).filter(modifiedAtSeqBound).count()
+        );
     }
+
 
     @Override
     public void close() {
