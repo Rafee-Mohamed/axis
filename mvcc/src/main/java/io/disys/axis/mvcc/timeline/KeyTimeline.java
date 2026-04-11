@@ -2,7 +2,9 @@ package io.disys.axis.mvcc.timeline;
 
 import io.disys.axis.mvcc.internal.VolatileList;
 import io.disys.axis.mvcc.model.*;
+import io.disys.axis.mvcc.model.Record;
 
+import java.util.List;
 import java.util.Optional;
 
 public class KeyTimeline {
@@ -18,6 +20,19 @@ public class KeyTimeline {
         return new KeyTimeline(
                 VolatileList.allocate(10),
                 LiveSpan.init(revision)
+        );
+    }
+
+    public static KeyTimeline restore(Revision revision, Record record) {
+        if (record.tombstone()) {
+            return new KeyTimeline(
+                    VolatileList.of(new DeadSpan(List.of(revision), record.createdAtSeq(), record.version())),
+                    LiveSpan.empty(1)
+            );
+        }
+        return new KeyTimeline(
+                VolatileList.allocate(10),
+                LiveSpan.restore(revision, record.createdAtSeq(), record.version())
         );
     }
 

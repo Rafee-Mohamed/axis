@@ -1,5 +1,6 @@
 package io.disys.axis.mvcc.store;
 
+import io.disys.axis.backend.ReadTxn;
 import io.disys.axis.mvcc.codec.*;
 import io.disys.axis.mvcc.io.*;
 import io.disys.axis.mvcc.model.*;
@@ -33,50 +34,104 @@ public class VersionedStore {
             String name,
             byte[] persistedCommitSeqKey,
             byte[] firstCommitSeqKey,
-            byte[] compactedRevisionKey
+            byte[] compactedRevisionKey,
+            byte[] completedCompactionCommitSeqKey
     ) implements Database {
     }
 
-    VersionedStore(Backend backend, VersionedStoreConfig config) {
+    private VersionedStore(
+            Backend backend,
+            VersionedStoreConfig config,
+            CommitSeqBound bound,
+            Db db,
+            KeyTimelineIndex index,
+            RevisionRecordBuffer buffer,
+            WriteSession session,
+            BatchCompactor compactor,
+            RecordEncoder encoder,
+            RecordDecoder decoder
+    ) {
         this.backend = backend;
         this.config = config;
-        this.index = new KeyTimelineIndex(new PersistentBPlusTree<>(
-                8,
+        this.index = index;
+        this.buffer = buffer;
+        this.session = session;
+        this.compactor = compactor;
+        this.bound = bound;
+        this.db = db;
+        this.encoder = encoder;
+        this.decoder = decoder;
+
+    }
+
+    public static VersionedStore restore(Backend backend, VersionedStoreConfig config) {
+        var encoder = new RecordEncoder();
+        var decoder = new RecordDecoder();
+        var index = new KeyTimelineIndex(new PersistentBPlusTree<>(
+                config.indexMaxKeys(),
                 new PackedByteKeyStorageFactory(new LexigographicPackedByteComparator())
         ));
-        this.buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
-        this.encoder = new RecordEncoder();
-        this.decoder = new RecordDecoder();
+
+        var db = getDb(config);
+        var txn = backend.beginRead();
+
+        var bound = getBound(txn, db.meta());
+
+        try (var it = txn.range(db.revision())) {
+            for (var kv: it) {
+                var revision = decoder.decodeRevision(kv.key());
+                var record = decoder.decodeRecord(kv.val());
+
+                index.restore(revision, record);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+
+        var buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
+        var completedCompactionCommitSeq = commitSeq(txn, db.meta(), db.meta().completedCompactionCommitSeqKey());
+
+        BatchCompactor compactor;
+
+        if (bound.start() == completedCompactionCommitSeq) {
+            compactor = BatchCompactor.completed();
+        } else {
+            var retained = index.compact(bound.start());
+            compactor = BatchCompactor.create(txn, db, config.deleteBatchSize(), retained, decoder);
+        }
+
+        txn.close();
+
+        var session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder, compactor);
+
+        return new VersionedStore(backend, config, bound, db, index, buffer, session, compactor, encoder, decoder);
+    }
+
+    private static Db getDb(VersionedStoreConfig config) {
         var metaDb = new MetaDb(
                 config.metaDB(),
                 config.persistedCommitSeq().getBytes(),
                 config.firstCommitSeq().getBytes(),
-                config.compactedRevision().getBytes());
-        this.db = new Db(Database.of(config.versionDB()), metaDb);
-        this.bound = getState(backend, metaDb);
-        var txn = backend.beginWrite();
-        this.compactor = BatchCompactor.create(txn, db, config.deleteBatchSize(), Set.of(), decoder);
-        this.session = new WriteSession(config, db, txn, index, buffer, bound, encoder, decoder, compactor);
+                config.compactedRevision().getBytes(),
+                config.completedCompactionCommitSeq().getBytes()
+        );
+
+        return new Db(Database.of(config.versionDB()), metaDb);
     }
 
-    public static VersionedStore restore(Backend backend, VersionedStoreConfig config) {
-        return new VersionedStore(backend, config);
+    private static CommitSeqBound getBound(ReadTxn txn, MetaDb db) {
+        var lastPersistedCommitSeq = commitSeq(txn, db, db.persistedCommitSeqKey());
+        var firstVisibleCommitSeq = commitSeq(txn, db, db.firstCommitSeqKey());
+
+        return new CommitSeqBound(firstVisibleCommitSeq, lastPersistedCommitSeq);
     }
 
-    private static CommitSeqBound getState(Backend backend, MetaDb db) {
-        try (var readTxn = backend.beginRead()) {
-            var lastPersistedCommitSeq = readTxn.get(db, db.persistedCommitSeqKey())
-                    .map(ByteBuffer::wrap)
-                    .map(ByteBuffer::getLong)
-                    .orElse(0L);
-
-            var firstVisibleCommitSeq = readTxn.get(db, db.firstCommitSeqKey())
-                    .map(ByteBuffer::wrap)
-                    .map(ByteBuffer::getLong)
-                    .orElse(0L);
-
-            return new CommitSeqBound(firstVisibleCommitSeq, lastPersistedCommitSeq);
-        }
+    private static long commitSeq(ReadTxn txn, MetaDb db, byte[] key) {
+        return txn.get(db,key)
+                .map(ByteBuffer::wrap)
+                .map(ByteBuffer::getLong)
+                .orElse(0L);
     }
 
     // Multi thread access

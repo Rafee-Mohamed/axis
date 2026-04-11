@@ -9,6 +9,7 @@ import io.disys.axis.mvcc.store.VersionedStore;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Set;
 
 public class BatchCompactor {
@@ -26,7 +27,8 @@ public class BatchCompactor {
             byte[] compactedRevision,
             byte[] visibleRevision,
             Set<Revision> retained,
-            RecordDecoder decoder
+            RecordDecoder decoder,
+            boolean done
     ) {
         this.batchSize = batchSize;
         this.compactedRevision = compactedRevision;
@@ -34,7 +36,7 @@ public class BatchCompactor {
         this.db = db;
         this.retained = retained;
         this.decoder = decoder;
-        this.done = false;
+        this.done = done;
     }
 
 
@@ -47,7 +49,8 @@ public class BatchCompactor {
     ) {
         var compactedRevision = txn.get(db.meta(), db.meta().compactedRevisionKey())
                 .orElse(CodecConstants.START_REVISION);
-        var visibleCommitSeq = txn.get(db.meta(), db.meta().firstCommitSeqKey())
+
+        var visibleRevision = txn.get(db.meta(), db.meta().firstCommitSeqKey())
                 .map(seq -> ByteBuffer.allocate(CodecConstants.REVISION_SIZE)
                         .put(seq)
                         .putInt(0)
@@ -57,11 +60,25 @@ public class BatchCompactor {
                 db,
                 batchSize,
                 compactedRevision,
-                visibleCommitSeq,
+                visibleRevision,
                 retained,
-                decoder
+                decoder,
+                false
         );
     }
+
+    public static BatchCompactor completed() {
+        return new BatchCompactor(
+                null,
+                0,
+                null,
+                null,
+                null,
+                null,
+                true
+        );
+    }
+
 
     public boolean done() {
         return done;
@@ -89,13 +106,19 @@ public class BatchCompactor {
         }
 
         done = revisions.size() < batchSize;
-        if (revisions.isEmpty()) {
+        if (done) {
+            txn.put(
+                    db.meta(),
+                    db.meta().completedCompactionCommitSeqKey(),
+                    Arrays.copyOf(visibleRevision, 8)
+            );
             return;
         }
 
         for (var revision: revisions) {
             txn.delete(db.revision(), revision);
         }
+
         txn.put(db.meta(), db.meta().compactedRevisionKey(), revisions.getLast());
         compactedRevision = revisions.getLast();
     }

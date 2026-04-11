@@ -22,6 +22,10 @@ public class LiveSpan implements KeySpan {
         return new LiveSpan(VolatileList.of(revision), 0, revision.commitSeq(), 0);
     }
 
+    static LiveSpan restore(Revision revision, long createdAt, int version) {
+        return new LiveSpan(VolatileList.of(revision), 0, createdAt, version);
+    }
+
     static LiveSpan empty(int position) {
         return new LiveSpan(VolatileList.allocate(10), position, -1, 0);
     }

@@ -1,5 +1,6 @@
 package io.disys.axis.mvcc.timeline;
 
+import io.disys.axis.mvcc.codec.RecordDecoder;
 import io.disys.axis.mvcc.model.*;
 
 import java.util.*;
@@ -8,6 +9,7 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
+import io.disys.axis.mvcc.model.Record;
 import io.dsal.persistent.index.core.PersistentBPlusTree;
 
 public class KeyTimelineIndex {
@@ -91,6 +93,18 @@ public class KeyTimelineIndex {
         return revisions(from, to, t -> t.revisionAt(commitSeq));
     }
 
+    public void restore(Revision revision, Record record) {
+        var timeline = index.get(record.key());
+
+        if (timeline == null) {
+            timeline = KeyTimeline.restore(revision, record);
+            index.put(record.key(), timeline);
+        } else if (record.tombstone()) {
+            timeline.tryComplete(revision);
+        } else {
+            timeline.add(revision);
+        }
+    }
 
     public KeySpan add(byte[] key, Revision revision) {
         var timeline = index.get(key);
