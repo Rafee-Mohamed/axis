@@ -1,7 +1,6 @@
 package io.disys.axis.mvcc.store;
 
 import io.disys.axis.mvcc.codec.*;
-import io.disys.axis.mvcc.error.*;
 import io.disys.axis.mvcc.io.*;
 import io.disys.axis.mvcc.model.*;
 import io.disys.axis.mvcc.timeline.*;
@@ -12,8 +11,8 @@ import io.dsal.persistent.index.core.PersistentBPlusTree;
 import io.dsal.persistent.index.layout.LexigographicPackedByteComparator;
 import io.dsal.persistent.index.layout.PackedByteKeyStorageFactory;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Set;
 
 public class VersionedStore {
     private final KeyTimelineIndex index;
@@ -25,11 +24,17 @@ public class VersionedStore {
     private final RecordDecoder decoder;
     private final Db db;
     private WriteSession session;
+    private BatchCompactor compactor;
 
     public record Db(Database revision, MetaDb meta) {
     }
 
-    public record MetaDb(String name, byte[] persistedCommitSeqKey, byte[] firstCommitSeqKey) implements Database {
+    public record MetaDb(
+            String name,
+            byte[] persistedCommitSeqKey,
+            byte[] firstCommitSeqKey,
+            byte[] compactedRevisionKey
+    ) implements Database {
     }
 
     VersionedStore(Backend backend, VersionedStoreConfig config) {
@@ -42,11 +47,16 @@ public class VersionedStore {
         this.buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
         this.encoder = new RecordEncoder();
         this.decoder = new RecordDecoder();
-        var metaDb = new MetaDb(config.metaDB(), config.persistedCommitSeq().getBytes(),
-                config.firstCommitSeq().getBytes());
+        var metaDb = new MetaDb(
+                config.metaDB(),
+                config.persistedCommitSeq().getBytes(),
+                config.firstCommitSeq().getBytes(),
+                config.compactedRevision().getBytes());
         this.db = new Db(Database.of(config.versionDB()), metaDb);
         this.bound = getState(backend, metaDb);
-        this.session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
+        var txn = backend.beginWrite();
+        this.compactor = BatchCompactor.create(txn, db, config.deleteBatchSize(), Set.of(), decoder);
+        this.session = new WriteSession(config, db, txn, index, buffer, bound, encoder, decoder, compactor);
     }
 
     public static VersionedStore restore(Backend backend, VersionedStoreConfig config) {
@@ -86,6 +96,10 @@ public class VersionedStore {
     // compact removes all revisions existed before given commitSeq
     // that are not present as the point in time view of commitSeq
     public void compact(long commitSeq) {
+        if (!compactor.done()) {
+            return;
+        }
+
         if (bound.start() >= commitSeq) {
             return;
         }
@@ -132,7 +146,7 @@ public class VersionedStore {
         // should be returned with compacted via published compact commitSeq in backend.
         // The index is concurrently mutated by CoW therefore all readers must view the
         // consistent state of index at any given point
-        index.compact(commitSeq);
+        var retained = index.compact(commitSeq);
 
         // ----- On creating new Reader, during this interleaving
         // all the readers will see a consistent buffer, index and firstVisibleCommitSeq
@@ -143,13 +157,15 @@ public class VersionedStore {
         // on visibility of revisions before that compaction point
 
         // from now on new writes on in this session with new buffer and new index
-        session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
+        var txn = backend.beginWrite();
+        compactor = BatchCompactor.create(txn, db, config.deleteBatchSize(), retained, decoder);
+        session = new WriteSession(config, db, txn, index, buffer, bound, encoder, decoder, compactor);
     }
 
     public void sync() {
         session.commit();
         renewBuffer();
-        session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
+        session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder, compactor);
     }
 
     public Writer writer() {
@@ -166,7 +182,7 @@ public class VersionedStore {
             // records can be present in backend but can hold old buffer
             // so two views of same data, while reading keep this in mind
             renewBuffer();
-            session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder);
+            session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder, compactor);
         }
         return session;
     }

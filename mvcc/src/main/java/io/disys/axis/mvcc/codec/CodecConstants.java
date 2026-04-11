@@ -3,7 +3,8 @@ package io.disys.axis.mvcc.codec;
 import io.disys.axis.mvcc.model.*;
 
 public class CodecConstants {
-    static final int REVISION_SIZE = Long.BYTES + Integer.BYTES;
+    public static final int REVISION_SIZE = Long.BYTES + Integer.BYTES;
+    public static final byte[] START_REVISION = new byte[REVISION_SIZE];
     static final int TOMBSTONE_MARKER_SIZE = Byte.BYTES;
     static final int METADATA_SIZE = Integer.BYTES + Long.BYTES + Long.BYTES;
     static final int KEY_LEN_SIZE = Integer.BYTES;

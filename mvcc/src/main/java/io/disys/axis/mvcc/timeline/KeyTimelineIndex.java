@@ -12,15 +12,9 @@ import io.dsal.persistent.index.core.PersistentBPlusTree;
 
 public class KeyTimelineIndex {
     private final PersistentBPlusTree<byte[], KeyTimeline> index;
-    private final SortedSet<Revision> visibleRevisionsBelowCompactionSeq;
-
-    public KeyTimelineIndex(PersistentBPlusTree<byte[], KeyTimeline> index, SortedSet<Revision> visibleRevisionsBelowCompactionSeq) {
-        this.index = index;
-        this.visibleRevisionsBelowCompactionSeq = visibleRevisionsBelowCompactionSeq;
-    }
 
     public KeyTimelineIndex(PersistentBPlusTree<byte[], KeyTimeline> index) {
-        this(index, new TreeSet<>());
+        this.index = index;
     }
 
     public Optional<Revision> revision(byte[] key, Function<KeyTimeline, Optional<Revision>> mapper) {
@@ -117,7 +111,8 @@ public class KeyTimelineIndex {
         return Optional.empty();
     }
 
-    public void compact(long commitSeq) {
+    public Set<Revision> compact(long commitSeq) {
+        var retained = new HashSet<Revision>();
         // index iterable iterator pins the current root and
         // walks through that pinned index reading
         // the snapshot as existed during iterator creation
@@ -144,9 +139,10 @@ public class KeyTimelineIndex {
             // everything after firstRevision is strictly
             // greater than commitSeq
             if (firstRevision.compareTo(commitSeq) < 0) {
-                visibleRevisionsBelowCompactionSeq.add(firstRevision);
+                retained.add(firstRevision);
             }
-
         }
+
+        return retained;
     }
 }

@@ -1,7 +1,7 @@
 package io.disys.axis.mvcc.model;
 
 public class CommitSeqBound {
-    private volatile long start;
+    private long start;
     private volatile long end;
 
     public CommitSeqBound(long start, long end) {

@@ -10,8 +10,8 @@ import io.disys.axis.mvcc.timeline.*;
 import io.disys.axis.backend.WriteTxn;
 
 import java.nio.ByteBuffer;
-import java.util.Iterator;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 
@@ -26,6 +26,7 @@ public class WriteSession implements Writer {
     private final VersionedStore.Db db;
     private final long expiryTime;
     private int ordinal;
+    private final BatchCompactor compactor;
 
     public WriteSession(
             VersionedStoreConfig config,
@@ -35,7 +36,9 @@ public class WriteSession implements Writer {
             RevisionRecordBuffer buffer,
             CommitSeqBound bound,
             RecordEncoder encoder,
-            RecordDecoder decoder) {
+            RecordDecoder decoder,
+            BatchCompactor compactor
+    ) {
         this.config = config;
         this.txn = txn;
         this.index = index;
@@ -46,6 +49,7 @@ public class WriteSession implements Writer {
         this.db = db;
         this.ordinal = 0;
         this.expiryTime = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.revisionRecordBufferSyncTimeout());
+        this.compactor = compactor;
     }
 
     boolean expired() {
@@ -68,6 +72,7 @@ public class WriteSession implements Writer {
                 db.meta(),
                 db.meta().persistedCommitSeqKey(),
                 ByteBuffer.allocate(Long.BYTES).putLong(bound.end()).array());
+        compactor.compact(txn);
         txn.commit();
         txn.close();
     }
