@@ -1,0 +1,38 @@
+syntax = "proto3";
+package axis.consensus;
+option java_package = "io.disys.axis.consensus.proto";
+option java_multiple_files = true;
+option java_outer_classname = "WalProto";
+
+import "peer_transport.proto";
+
+// A single record persisted to the WAL during a persistence cycle.
+// Each field maps to one durable concern:
+//   hard_state  — term and voted-for; must survive crashes to preserve the single-vote invariant
+//   checkpoint  — committed index; optional optimisation to skip re-applying entries on restart
+//   snapshot    — membership and log boundary after a snapshot is installed
+//   entry       — a replicated log entry
+message WalRecord {
+    oneof type {
+        HardState    hard_state = 1;
+        Checkpoint   checkpoint = 2;
+        SnapshotMeta snapshot   = 3;
+        Entry entry      = 4;
+    }
+
+    message HardState {
+        uint64 term      = 1;
+        uint64 voted_for = 2; // 0 = no vote (NodeId 0 is reserved as the "none" sentinel)
+    }
+
+    message Checkpoint {
+        uint64 committed_index = 1;
+    }
+
+    // Metadata only — state machine data is stored separately, not in the WAL.
+    message SnapshotMeta {
+        uint64           term       = 1;
+        uint64           index      = 2;
+        MembershipConfig membership = 3;
+    }
+}
