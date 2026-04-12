@@ -1,0 +1,239 @@
+syntax = "proto3";
+package axis.consensus;
+option java_package = "io.disys.axis.consensus.proto";
+option java_multiple_files = true;
+option java_outer_classname = "PeerTransportProto";
+
+// ===== Enums =====
+
+enum ElectionCause {
+    ELECTION_CAUSE_UNSPECIFIED = 0;
+    ELECTION_CAUSE_TIMEOUT = 1;
+    ELECTION_CAUSE_LEADER_TRANSFER = 2;
+    ELECTION_CAUSE_WON_PREELECTION = 3;
+    ELECTION_CAUSE_ROUND_TIMEOUT = 4;
+}
+
+enum MembershipTransition {
+    MT_UNSPECIFIED = 0;
+    MT_AUTO = 1;
+    MT_JOINT_AUTO = 2;
+    MT_JOINT_EXPLICIT = 3;
+    MT_NONE = 4;
+}
+
+enum MembershipChangeType {
+    MCT_UNSPECIFIED = 0;
+    MCT_REMOVE = 1;
+    MCT_ADD_VOTER = 2;
+    MCT_ADD_LEARNER = 3;
+}
+
+// ===== Supporting messages =====
+
+message JointConfig {
+    repeated uint64 current_voters = 1;
+    repeated uint64 incoming_voters = 2;
+}
+
+message MembershipConfig {
+    JointConfig voters = 1;
+    repeated uint64 learner_ids = 2;
+    repeated uint64 next_learner_ids = 3;
+    MembershipTransition transition = 4;
+}
+
+message MembershipChange {
+    uint64 node_id = 1;
+    MembershipChangeType type = 2;
+}
+
+message MembershipChanges {
+    repeated MembershipChange changes = 1;
+    MembershipTransition transition = 2;
+}
+
+message Snapshot {
+    uint64 term = 1;
+    uint64 index = 2;
+    MembershipConfig membership = 3;
+    bytes data = 4;
+}
+
+// ===== Entry =====
+
+message Entry {
+    oneof variant {
+        Placeholder placeholder = 1;
+        Data data = 2;
+        MembershipChangeEntry membership_change = 3;
+        LeaveJoint leave_joint = 4;
+    }
+
+    message Placeholder {
+        uint64 term = 1;
+        uint64 index = 2;
+    }
+
+    message Data {
+        uint64 term = 1;
+        uint64 index = 2;
+        bytes data = 3;
+    }
+
+    message MembershipChangeEntry {
+        uint64 term = 1;
+        uint64 index = 2;
+        MembershipChanges changes = 3;
+    }
+
+    message LeaveJoint {
+        uint64 term = 1;
+        uint64 index = 2;
+    }
+}
+
+// ===== Peer messages =====
+
+message AppendEntries {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+    uint64 prev_log_term = 4;
+    uint64 prev_log_index = 5;
+    repeated Entry entries = 6;
+    uint64 leader_commit = 7;
+}
+
+message AppendEntriesResponse {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+    bool success = 4;
+    uint64 index = 5;
+    uint64 term_hint = 6;
+    uint64 index_hint = 7;
+}
+
+message InstallSnapshot {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+    Snapshot snapshot = 4;
+}
+
+message Heartbeat {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+    uint64 leader_commit = 4;
+    uint64 sequence = 5;
+}
+
+message HeartbeatResponse {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+    uint64 sequence = 4;
+}
+
+message RequestVote {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+    uint64 last_log_term = 4;
+    uint64 last_log_index = 5;
+    ElectionCause cause = 6;
+}
+
+message RequestVoteResponse {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+    bool vote_granted = 4;
+}
+
+message RequestPreVote {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+    uint64 last_log_term = 4;
+    uint64 last_log_index = 5;
+}
+
+message RequestPreVoteResponse {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+    bool vote_granted = 4;
+}
+
+message TransferLeadership {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 transferee_id = 3;
+}
+
+message TimeoutNow {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+}
+
+message ReadIndex {
+    uint64 to = 1;
+    uint64 from = 2;
+}
+
+message ReadIndexResponse {
+    uint64 to = 1;
+    uint64 from = 2;
+    uint64 term = 3;
+    uint64 read_index = 4;
+}
+
+message DataProposal {
+    uint64 to = 1;
+    uint64 from = 2;
+    repeated bytes data = 3;
+}
+
+message MembershipChangeProposal {
+    uint64 to = 1;
+    uint64 from = 2;
+    MembershipChanges changes = 3;
+}
+
+message LeaveJointProposal {
+    uint64 to = 1;
+    uint64 from = 2;
+}
+
+// ===== Envelope =====
+
+message PeerMessage {
+    oneof message {
+        AppendEntries append_entries = 1;
+        AppendEntriesResponse append_entries_response = 2;
+        InstallSnapshot install_snapshot = 3;
+        Heartbeat heartbeat = 4;
+        HeartbeatResponse heartbeat_response = 5;
+        RequestVote request_vote = 6;
+        RequestVoteResponse request_vote_response = 7;
+        RequestPreVote request_pre_vote = 8;
+        RequestPreVoteResponse request_pre_vote_response = 9;
+        TransferLeadership transfer_leadership = 10;
+        TimeoutNow timeout_now = 11;
+        ReadIndex read_index = 12;
+        ReadIndexResponse read_index_response = 13;
+        DataProposal data_proposal = 14;
+        MembershipChangeProposal membership_change_proposal = 15;
+        LeaveJointProposal leave_joint_proposal = 16;
+    }
+}
+
+// ===== Service =====
+
+service RaftTransportService {
+    rpc Stream(stream PeerMessage) returns (stream PeerMessage);
+}
