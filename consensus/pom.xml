@@ -17,4 +17,58 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
+    <dependencies>
+        <!-- Raft consensus library -->
+        <dependency>
+            <groupId>io.disys</groupId>
+            <artifactId>jaft</artifactId>
+            <version>0.1.0-SNAPSHOT</version>
+        </dependency>
+
+        <!-- WAL - durable replicated log -->
+        <dependency>
+            <groupId>io.disys</groupId>
+            <artifactId>wal</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- MVCC store - state machine -->
+        <dependency>
+            <groupId>io.disys</groupId>
+            <artifactId>mvcc</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- gRPC transport (Netty + HTTP/2, bundled/shaded to avoid classpath conflicts) -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+        </dependency>
+        <!-- Bridges protobuf serialization into gRPC -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-protobuf</artifactId>
+        </dependency>
+        <!-- Base classes for generated stubs -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-stub</artifactId>
+        </dependency>
+        <!-- Protobuf runtime - message serialization -->
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Generates Java from .proto files in src/main/protobuf/ at compile time -->
+            <plugin>
+                <groupId>io.github.ascopes</groupId>
+                <artifactId>protobuf-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>
