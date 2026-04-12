@@ -1,5 +1,6 @@
 package io.disys.axis.mvcc.io;
 
+import io.disys.axis.backend.ReadHandle;
 import io.disys.axis.backend.ReadTxn;
 import io.disys.axis.backend.WriteTxn;
 import io.disys.axis.mvcc.codec.CodecConstants;
@@ -41,16 +42,16 @@ public class BatchCompactor {
 
 
     public static BatchCompactor create(
-            ReadTxn txn,
+            ReadHandle handle,
             VersionedStore.Db db,
             int batchSize,
             Set<Revision> retained,
             RecordDecoder decoder
     ) {
-        var compactedRevision = txn.get(db.meta(), db.meta().compactedRevisionKey())
+        var compactedRevision = handle.get(db.meta(), db.meta().compactedRevisionKey())
                 .orElse(CodecConstants.START_REVISION);
 
-        var visibleRevision = txn.get(db.meta(), db.meta().firstCommitSeqKey())
+        var visibleRevision = handle.get(db.meta(), db.meta().firstCommitSeqKey())
                 .map(seq -> ByteBuffer.allocate(CodecConstants.REVISION_SIZE)
                         .put(seq)
                         .putInt(0)

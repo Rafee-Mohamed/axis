@@ -1,5 +1,6 @@
 package io.disys.axis.mvcc.store;
 
+import io.disys.axis.backend.ReadHandle;
 import io.disys.axis.mvcc.model.Record;
 
 import java.util.Optional;
@@ -34,6 +35,7 @@ public interface Reader extends AutoCloseable {
     SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq);
     SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound bound);
 
+    ReadHandle handle();
     @Override
     void close();
 }

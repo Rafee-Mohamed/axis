@@ -1,5 +1,6 @@
 package io.disys.axis.mvcc.io;
 
+import io.disys.axis.backend.ReadHandle;
 import io.disys.axis.mvcc.codec.*;
 import io.disys.axis.mvcc.error.*;
 import io.disys.axis.mvcc.model.*;
@@ -308,6 +309,11 @@ public class CommitBoundedReader implements Reader {
         return result != null ? result : new SnapshotResult.Ok<>(
                 index.pinnedCountAt(from, to, commitSeq).filter(modifiedAtSeqBound).count()
         );
+    }
+
+    @Override
+    public ReadHandle handle() {
+        return txn;
     }
 
 

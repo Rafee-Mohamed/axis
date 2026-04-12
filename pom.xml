@@ -13,7 +13,6 @@
         <module>server</module>
         <module>backend</module>
         <module>mvcc</module>
-        <module>lease</module>
         <module>backend-lmdb</module>
         <module>wal</module>
         <module>lease</module>

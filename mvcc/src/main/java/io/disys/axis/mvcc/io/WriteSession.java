@@ -1,5 +1,6 @@
 package io.disys.axis.mvcc.io;
 
+import io.disys.axis.backend.WriteHandle;
 import io.disys.axis.mvcc.codec.*;
 import io.disys.axis.mvcc.error.*;
 import io.disys.axis.mvcc.model.*;
@@ -158,6 +159,11 @@ public class WriteSession implements Writer {
         var deleted = mapper.revision.ordinal() - ordinal;
         ordinal = mapper.revision.ordinal();
         return deleted;
+    }
+
+    @Override
+    public WriteHandle handle() {
+        return txn;
     }
 
 
