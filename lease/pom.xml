@@ -17,4 +17,14 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
+    <dependencies>
+    <!-- MVCC store -->
+    <dependency>
+        <groupId>io.disys</groupId>
+        <artifactId>mvcc</artifactId>
+        <version>${project.version}</version>
+    </dependency>
+
+    </dependencies>
+
 </project>
