@@ -84,10 +84,7 @@ public class VersionedStore {
 
                 index.restore(revision, record);
             }
-        } catch (Exception e) {
-            throw new RuntimeException(e);
         }
-
 
         var buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
         var completedCompactionCommitSeq = commitSeq(txn, db.meta(), db.meta().completedCompactionCommitSeqKey());

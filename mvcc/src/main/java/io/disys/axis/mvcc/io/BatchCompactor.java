@@ -102,8 +102,6 @@ public class BatchCompactor {
                     revisions.add(revision);
                 }
             }
-        } catch (Exception e) {
-            throw new RuntimeException(e);
         }
 
         done = revisions.size() < batchSize;
