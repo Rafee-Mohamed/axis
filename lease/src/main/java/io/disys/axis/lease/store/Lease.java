@@ -10,26 +10,38 @@ import java.util.Set;
 
 public class Lease {
     private final long id;
-    private final Instant expiry;
+    private Instant expiry;
     private final long ttl;
     private long remainingTtl;
     private final Set<LeaseItem> items;
+    private final Clock clock;
+    private int scheduleEpoch;
 
 
-    public Lease(long id, long ttl, long remainingTtl, Instant expiry, Set<LeaseItem> items) {
+    Lease(long id, long ttl, long remainingTtl, Clock clock, Instant expiry, Set<LeaseItem> items) {
         this.id = id;
         this.ttl = ttl;
         this.remainingTtl = remainingTtl;
         this.expiry = expiry;
         this.items = items;
+        this.clock = clock;
+        this.scheduleEpoch = 0;
     }
 
-    public static Lease start(long id, Instant expiry, long ttl) {
-        return new Lease(id, ttl, 0, expiry, new HashSet<>());
+    // ttl == remainingTtl at start
+    public static Lease start(long id,  long ttl, Clock clock) {
+        return new Lease(id, ttl, ttl, clock, clock.instant().plusSeconds(ttl), new HashSet<>());
     }
 
     public static Lease restore(long id, LeaseRecord record, Clock clock) {
-        return new Lease(id, record.ttl(), record.remainingTtl(), clock.instant(), new HashSet<>());
+        return new Lease(
+                id,
+                record.ttl(),
+                record.remainingTtl(),
+                clock,
+                clock.instant().plusSeconds(record.remainingTtl()),
+                new HashSet<>()
+        );
     }
 
     long id() {
@@ -44,8 +56,32 @@ public class Lease {
         return remainingTtl;
     }
 
+    Instant expiry() {
+        return expiry;
+    }
 
-    public void addItem(byte[] key) {
+    Set<LeaseItem> items() {
+        return items;
+    }
+
+    void advanceScheduleEpoch() {
+        scheduleEpoch++;
+    }
+
+    int scheduleEpoch() {
+        return scheduleEpoch;
+    }
+
+    void addItem(byte[] key) {
         items.add(new LeaseItem(key));
+    }
+
+    void renew() {
+        remainingTtl = 0;
+        expiry = clock.instant().plusSeconds(ttl);
+    }
+
+    void setRemainingTtl(long ttl) {
+        remainingTtl = ttl;
     }
 }

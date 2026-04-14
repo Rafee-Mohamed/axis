@@ -10,13 +10,13 @@ import java.util.function.Consumer;
 
 public class LeaseStoreState {
     final Clock clock;
-    final Map<Long, Lease> leaseMap;
+    final Map<Long, Lease> leases;
     final LeaseBackendHandle bh;
     final LeaseStoreConfig config;
 
-    public LeaseStoreState(Clock clock, Map<Long, Lease> leaseMap, LeaseBackendHandle bh, LeaseStoreConfig config) {
+    public LeaseStoreState(Clock clock, Map<Long, Lease> leases, LeaseBackendHandle bh, LeaseStoreConfig config) {
         this.clock = clock;
-        this.leaseMap = leaseMap;
+        this.leases = leases;
         this.bh = bh;
         this.config = config;
     }
@@ -24,8 +24,9 @@ public class LeaseStoreState {
     public Consumer<Record> storeRecordConsumer() {
         var decoder = new LeaseDataDecoder();
         return record -> {
+            if (record.tombstone()) return;
             var id = decoder.decodeVal(record.val());
-            leaseMap.computeIfPresent(id, (_, lease) -> {
+            leases.computeIfPresent(id, (_, lease) -> {
                 lease.addItem(record.key());
                 return lease;
             });
@@ -33,6 +34,6 @@ public class LeaseStoreState {
     }
 
     public LeaseStore toStore(VersionedStore store) {
-        return LeaseStore.fromState(this, store);
+        return LeaseStore.from(this, store);
     }
 }
