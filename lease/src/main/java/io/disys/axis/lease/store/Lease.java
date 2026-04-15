@@ -15,7 +15,7 @@ public class Lease {
     private long remainingTtl;
     private final Set<LeaseItem> items;
     private final Clock clock;
-    private int scheduleEpoch;
+    private int renewals;
 
 
     Lease(long id, long ttl, long remainingTtl, Clock clock, Instant expiry, Set<LeaseItem> items) {
@@ -25,7 +25,7 @@ public class Lease {
         this.expiry = expiry;
         this.items = items;
         this.clock = clock;
-        this.scheduleEpoch = 0;
+        this.renewals = 0;
     }
 
     // ttl == remainingTtl at start
@@ -64,19 +64,25 @@ public class Lease {
         return items;
     }
 
-    void advanceScheduleEpoch() {
-        scheduleEpoch++;
+    int renewals() {
+        return renewals;
     }
 
-    int scheduleEpoch() {
-        return scheduleEpoch;
+
+    LeaseItem attach(byte[] key) {
+        var item = LeaseItem.of(key);
+        items.add(item);
+        return item;
     }
 
-    void addItem(byte[] key) {
-        items.add(new LeaseItem(key));
+    LeaseItem detach(byte[] key) {
+        var item = LeaseItem.of(key);
+        items.remove(item);
+        return item;
     }
 
     void renew() {
+        renewals++;
         remainingTtl = 0;
         expiry = clock.instant().plusSeconds(ttl);
     }

@@ -27,13 +27,9 @@ public class LeaseStoreState {
             if (record.tombstone()) return;
             var id = decoder.decodeVal(record.val());
             leases.computeIfPresent(id, (_, lease) -> {
-                lease.addItem(record.key());
+                lease.attach(record.key());
                 return lease;
             });
         };
-    }
-
-    public LeaseStore toStore(VersionedStore store) {
-        return LeaseStore.from(this, store);
     }
 }

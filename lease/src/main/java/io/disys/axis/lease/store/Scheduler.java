@@ -1,10 +1,12 @@
 package io.disys.axis.lease.store;
 
+import io.disys.axis.lease.model.Checkpoint;
+
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Optional;
-import java.util.PriorityQueue;
+import java.util.*;
+import java.util.function.Consumer;
 
 public class Scheduler {
     private final PriorityQueue<LeaseInstant> checkpoints;
@@ -20,14 +22,15 @@ public class Scheduler {
     }
 
     public void schedule(Lease lease) {
-        deadlines.add(new LeaseInstant(lease.id(), lease.expiry(), lease.scheduleEpoch()));
+        deadlines.add(new LeaseInstant(lease.id(), lease.expiry(), lease.renewals()));
 
         if (lease.remainingTtl() <= checkpointInterval.toSeconds()) {
             return;
         }
         var nextCheckpoint = clock.instant().plus(checkpointInterval);
-        checkpoints.add(new LeaseInstant(lease.id(), nextCheckpoint, lease.scheduleEpoch()));
+        checkpoints.add(new LeaseInstant(lease.id(), nextCheckpoint, lease.renewals()));
     }
+
 
     public Optional<Instant> nextSchedule() {
         if (deadlines.isEmpty() && checkpoints.isEmpty()) {
@@ -47,5 +50,53 @@ public class Scheduler {
                 : checkpoints.peek().when();
 
         return Optional.of(next);
+    }
+
+    public List<Long> expired(Map<Long, Lease> leases) {
+        var expiredLeases = new ArrayList<Long>();
+        var now = clock.instant();
+
+        while (!deadlines.isEmpty() && deadlines.peek().when().isBefore(now)) {
+            var next = deadlines.poll();
+            var lease = leases.get(next.id());
+
+            if (lease == null) {
+                continue;
+            }
+
+            // lease changed since scheduled
+            if (next.renewalsAtSchedule() < lease.renewals()) {
+                continue;
+            }
+
+            // epoch didn't change since schedule
+            expiredLeases.add(lease.id());
+        }
+
+        return expiredLeases;
+    }
+
+    public List<Checkpoint> checkpoints(Map<Long, Lease> leases) {
+        var nextCheckpoints = new ArrayList<Checkpoint>();
+        var now = clock.instant();
+
+        while (!checkpoints.isEmpty() && checkpoints.peek().when().isBefore(now)) {
+            var next = checkpoints.poll();
+            var lease = leases.get(next.id());
+
+            if (lease == null) {
+                continue;
+            }
+
+            // lease changed since scheduled
+            if (next.renewalsAtSchedule() < lease.renewals()) {
+                continue;
+            }
+
+            // epoch didn't change since schedule
+            nextCheckpoints.add(new Checkpoint(next.id(), lease.remainingTtl() - checkpointInterval.toSeconds()));
+        }
+
+        return nextCheckpoints;
     }
 }
