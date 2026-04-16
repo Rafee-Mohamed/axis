@@ -13,6 +13,7 @@ import java.nio.ByteBuffer;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
+import java.util.random.RandomGenerator;
 
 public class LeaseStore {
     private final Clock clock;
@@ -22,7 +23,7 @@ public class LeaseStore {
     private final LeaseStoreConfig config;
     private final LeaseDataEncoder encoder;
     private final LeaseDataDecoder decoder;
-
+    private final RandomGenerator rand;
     private final Database db;
 
 
@@ -34,7 +35,8 @@ public class LeaseStore {
             LeaseStoreConfig config,
             LeaseDataEncoder encoder,
             LeaseDataDecoder decoder,
-            Database db
+            Database db,
+            RandomGenerator rand
     ) {
         this.clock = clock;
         this.leases = leases;
@@ -44,9 +46,10 @@ public class LeaseStore {
         this.encoder = encoder;
         this.decoder = decoder;
         this.db = db;
+        this.rand = rand;
     }
 
-    public static LeaseStoreState restoreState(Backend backend, LeaseStoreConfig config, Clock clock) {
+    public static LeaseStoreState restoreState(Backend backend, LeaseStoreConfig config, Clock clock, RandomGenerator rand) {
         var db = Database.of(config.leaseDb());
         var encoder = new LeaseDataEncoder();
         var decoder = new LeaseDataDecoder();
@@ -58,7 +61,7 @@ public class LeaseStore {
             bh.consumeLeases(txn, (id, record) -> leases.put(id, Lease.restore(id, record, clock)));
         }
 
-        return new LeaseStoreState(clock, leases, bh, config);
+        return new LeaseStoreState(clock, leases, bh, config, rand);
     }
 
     static LeaseStore from(LeaseStoreState state) {
@@ -83,14 +86,20 @@ public class LeaseStore {
                 state.config,
                 encoder,
                 decoder,
-                Database.of(state.config.leaseDb())
+                Database.of(state.config.leaseDb()),
+                state.rand
         );
     }
 
 
     public long grant(WriteHandle wh, long ttl) {
         // should generate randomly
-        var id = 0;
+        var id = rand.nextLong(1, Long.MAX_VALUE);
+
+        while (leases.containsKey(id)) {
+            id = rand.nextLong(1, Long.MAX_VALUE);
+        }
+
         return grant(wh, id, ttl);
     }
 
@@ -108,12 +117,33 @@ public class LeaseStore {
         });
     }
 
-    public void renew(long id) {
+    public void tryRenew(long id) {
         var lease = leases.get(id);
         if (lease == null) {
             // lease not found
             return;
         }
+
+        if (lease.expired()) {
+            // expired wait - revoke in progress or still in queue but time has passed
+            // so do we renew even after expired but expired not yet taken
+            // of deadlines
+            return;
+        }
+
+        if (!lease.hasFullTtl()) {
+            // return the checkpoint to be replicated
+            // time has elapsed beyond at least one checkpoint
+            var checkpoint = new Checkpoint(lease.id(), lease.ttl());
+            return;
+        }
+
+        // can renew in memory
+        lease.renew();
+    }
+
+    public void checkpoint(Checkpoint checkpoint) {
+
     }
 
     public void attach(long id, byte[] key) {
@@ -128,6 +158,15 @@ public class LeaseStore {
             leaseItems.remove(lease.attach(key));
             return lease;
         });
+    }
+
+    public void trackSchedules() {
+        scheduler = Optional.of(scheduler.orElseGet(() ->
+                Scheduler.fromLeases(leases.values(), clock, config.checkpointInterval())));
+    }
+
+    public void untrackSchedules() {
+        scheduler = Optional.empty();
     }
 
     private Duration nextSchedule() {

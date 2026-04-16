@@ -14,12 +14,23 @@ public class Scheduler {
     private final Duration checkpointInterval;
     private final Clock clock;
 
+
     public Scheduler(Clock clock, Duration checkpointInterval) {
         this.checkpoints = new PriorityQueue<>();
         this.deadlines = new PriorityQueue<>();
         this.clock = clock;
         this.checkpointInterval = checkpointInterval;
     }
+
+
+    public static Scheduler fromLeases(Collection<Lease> leases, Clock clock, Duration checkpointInterval) {
+        var scheduler = new Scheduler(clock, checkpointInterval);
+        for (var lease: leases) {
+            scheduler.schedule(lease);
+        }
+        return scheduler;
+    }
+
 
     public void schedule(Lease lease) {
         deadlines.add(new LeaseInstant(lease.id(), lease.expiry(), lease.renewals()));

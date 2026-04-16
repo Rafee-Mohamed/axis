@@ -81,13 +81,25 @@ public class Lease {
         return item;
     }
 
-    void renew() {
-        renewals++;
-        remainingTtl = 0;
-        expiry = clock.instant().plusSeconds(ttl);
+    boolean expired() {
+        return clock.instant().isBefore(expiry);
     }
 
-    void setRemainingTtl(long ttl) {
+    void renew() {
+        renewals++;
         remainingTtl = ttl;
+        expiry = clock.instant().plusSeconds(remainingTtl);
+    }
+
+    void checkpoint(long nextRemainingTtl) {
+        if (ttl == nextRemainingTtl) {
+            renewals++;
+            expiry = clock.instant().plusSeconds(ttl);
+        }
+        remainingTtl = nextRemainingTtl;
+    }
+
+    public boolean hasFullTtl() {
+        return remainingTtl == ttl;
     }
 }
