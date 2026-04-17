@@ -5,11 +5,8 @@ import io.disys.axis.backend.Database;
 import io.disys.axis.backend.WriteHandle;
 import io.disys.axis.lease.codec.LeaseDataDecoder;
 import io.disys.axis.lease.codec.LeaseDataEncoder;
-import io.disys.axis.lease.model.Checkpoint;
-import io.disys.axis.lease.model.LeaseItem;
-import io.disys.axis.mvcc.store.VersionedStore;
+import io.disys.axis.lease.model.*;
 
-import java.nio.ByteBuffer;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
@@ -92,7 +89,7 @@ public class LeaseStore {
     }
 
 
-    public long grant(WriteHandle wh, long ttl) {
+    public GrantResult grant(WriteHandle wh, long ttl) {
         // should generate randomly
         var id = rand.nextLong(1, Long.MAX_VALUE);
 
@@ -103,61 +100,85 @@ public class LeaseStore {
         return grant(wh, id, ttl);
     }
 
-    public long grant(WriteHandle wh, long id, long ttl) {
+    public GrantResult grant(WriteHandle wh, long id, long ttl) {
+        if (leases.containsKey(id)) {
+            return new GrantResult.LeaseAlreadyExists(id);
+        }
         var lease = Lease.start(id, ttl, clock);
         wh.put(db, encoder.encodeKey(id), encoder.encodeRecord(lease.ttl(), lease.remainingTtl()));
-        return id;
+        return new GrantResult.LeaseGranted(id);
     }
 
-    public void revoke(WriteHandle wh, long id) {
-        leases.computeIfPresent(id, (_, lease) -> {
-            leases.remove(id).items().forEach(leaseItems::remove);
+    public RevokeResult revoke(WriteHandle wh, long id) {
+        if (!leases.containsKey(id)) {
+            return new RevokeResult.LeaseNotFound(id);
+        }
+
+        leases.compute(id, (_, lease) -> {
+            lease.items().forEach(leaseItems::remove);
             wh.delete(db, encoder.encodeKey(id));
-            return lease;
+            return null;
         });
+
+        return new RevokeResult.LeaseRevoked(id);
     }
 
-    public void tryRenew(long id) {
+    public RenewResult tryRenew(long id) {
         var lease = leases.get(id);
         if (lease == null) {
             // lease not found
-            return;
+            return new RenewResult.LeaseNotFound(id);
         }
 
         if (lease.expired()) {
             // expired wait - revoke in progress or still in queue but time has passed
             // so do we renew even after expired but expired not yet taken
             // of deadlines
-            return;
+            return new RenewResult.LeaseRevokeInProgress(id);
         }
 
         if (!lease.hasFullTtl()) {
             // return the checkpoint to be replicated
             // time has elapsed beyond at least one checkpoint
-            var checkpoint = new Checkpoint(lease.id(), lease.ttl());
-            return;
+            return new RenewResult.LeaseCheckpoint(lease.id(), lease.ttl());
         }
 
         // can renew in memory
         lease.renew();
+        return new RenewResult.LeaseRenewed(id, lease.remainingTtl());
     }
 
-    public void checkpoint(Checkpoint checkpoint) {
-
-    }
-
-    public void attach(long id, byte[] key) {
+    public void checkpoint(long id, long remainingTtl) {
         leases.computeIfPresent(id, (_, lease) -> {
+            lease.checkpoint(remainingTtl);
+            return lease;
+        });
+    }
+
+    public KeyAttachResult attach(long id, byte[] key) {
+        var l = leases.computeIfPresent(id, (_, lease) -> {
             leaseItems.put(lease.attach(key), id);
             return lease;
         });
+
+        if (l == null) {
+            return new KeyAttachResult.LeaseNotFound(id);
+        }
+
+        return new KeyAttachResult.Attached(id);
     }
 
-    public void detach(long id, byte[] key) {
-        leases.computeIfPresent(id, (_, lease) -> {
+    public KeyDetachResult detach(long id, byte[] key) {
+        var l = leases.computeIfPresent(id, (_, lease) -> {
             leaseItems.remove(lease.attach(key));
             return lease;
         });
+
+        if (l == null) {
+            return new KeyDetachResult.LeaseNotFound(id);
+        }
+
+        return new KeyDetachResult.Detached(id);
     }
 
     public void trackSchedules() {
@@ -169,7 +190,7 @@ public class LeaseStore {
         scheduler = Optional.empty();
     }
 
-    private Duration nextSchedule() {
+    private Optional<Duration> nextSchedule() {
         return scheduler
                 .flatMap(Scheduler::nextSchedule)
                 .map(next -> {
@@ -178,8 +199,7 @@ public class LeaseStore {
                         return Duration.ZERO;
                     }
                     return wakeAfter.compareTo(config.minWaitTime()) > 0 ? wakeAfter : config.minWaitTime();
-                })
-                .orElseGet(config::minWaitTime);
+                });
     }
 
     private List<Long> expired() {
