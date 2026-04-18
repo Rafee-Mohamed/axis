@@ -3,42 +3,42 @@ package io.disys.axis.lease.store;
 import io.disys.axis.lease.model.Checkpoint;
 
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
-import java.util.function.Consumer;
 
 public class Scheduler {
     private final PriorityQueue<LeaseInstant> checkpoints;
     private final PriorityQueue<LeaseInstant> deadlines;
-    private final Duration checkpointInterval;
+    private final Set<Long> revokeInProgress;
+    private final LeaseStoreConfig config;
     private final Clock clock;
 
 
-    public Scheduler(Clock clock, Duration checkpointInterval) {
+    public Scheduler(Clock clock, LeaseStoreConfig config) {
         this.checkpoints = new PriorityQueue<>();
         this.deadlines = new PriorityQueue<>();
+        this.revokeInProgress = new HashSet<>();
         this.clock = clock;
-        this.checkpointInterval = checkpointInterval;
+        this.config = config;
     }
 
 
-    public static Scheduler fromLeases(Collection<Lease> leases, Clock clock, Duration checkpointInterval) {
-        var scheduler = new Scheduler(clock, checkpointInterval);
+    public static Scheduler fromLeases(Collection<Lease> leases, Clock clock, LeaseStoreConfig config) {
+        var scheduler = new Scheduler(clock, config);
         for (var lease: leases) {
+            lease.extendExpiry(config.extendOnScheduleTrack());
             scheduler.schedule(lease);
         }
         return scheduler;
     }
 
-
     public void schedule(Lease lease) {
         deadlines.add(new LeaseInstant(lease.id(), lease.expiry(), lease.renewals()));
 
-        if (lease.remainingTtl() <= checkpointInterval.toSeconds()) {
+        if (lease.remainingTtl() <= config.checkpointInterval().toSeconds()) {
             return;
         }
-        var nextCheckpoint = clock.instant().plus(checkpointInterval);
+        var nextCheckpoint = clock.instant().plus(config.checkpointInterval());
         checkpoints.add(new LeaseInstant(lease.id(), nextCheckpoint, lease.renewals()));
     }
 
@@ -63,11 +63,19 @@ public class Scheduler {
         return Optional.of(next);
     }
 
+    public boolean expired(long id) {
+        return revokeInProgress.contains(id);
+    }
+
+    public void revoke(long id) {
+        revokeInProgress.remove(id);
+    }
+
     public List<Long> expired(Map<Long, Lease> leases) {
         var expiredLeases = new ArrayList<Long>();
         var now = clock.instant();
 
-        while (!deadlines.isEmpty() && deadlines.peek().when().isBefore(now)) {
+        while (expiredLeases.size() < config.revokeRate() && !deadlines.isEmpty() && deadlines.peek().when().isBefore(now)) {
             var next = deadlines.poll();
             var lease = leases.get(next.id());
 
@@ -82,16 +90,18 @@ public class Scheduler {
 
             // epoch didn't change since schedule
             expiredLeases.add(lease.id());
+            revokeInProgress.add(lease.id());
         }
 
         return expiredLeases;
     }
 
-    public List<Checkpoint> checkpoints(Map<Long, Lease> leases) {
-        var nextCheckpoints = new ArrayList<Checkpoint>();
+    public List<List<Checkpoint>> checkpoints(Map<Long, Lease> leases) {
+        var checkpointsBatch = new ArrayList<List<Checkpoint>>();
+        var batch = new ArrayList<Checkpoint>();
         var now = clock.instant();
 
-        while (!checkpoints.isEmpty() && checkpoints.peek().when().isBefore(now)) {
+        while (checkpointsBatch.size() < config.checkpointBatchRate() && !checkpoints.isEmpty() && checkpoints.peek().when().isBefore(now)) {
             var next = checkpoints.poll();
             var lease = leases.get(next.id());
 
@@ -105,9 +115,18 @@ public class Scheduler {
             }
 
             // epoch didn't change since schedule
-            nextCheckpoints.add(new Checkpoint(next.id(), lease.remainingTtl() - checkpointInterval.toSeconds()));
+            batch.add(new Checkpoint(next.id(), lease.remainingTtl() - config.checkpointInterval().toSeconds()));
+
+            if (batch.size() == config.checkpointBatchSize()) {
+                checkpointsBatch.add(batch);
+                batch = new ArrayList<>();
+            }
         }
 
-        return nextCheckpoints;
+        if (!batch.isEmpty() && batch.size() < config.checkpointBatchSize()) {
+            checkpointsBatch.add(batch);
+        }
+
+        return checkpointsBatch;
     }
 }

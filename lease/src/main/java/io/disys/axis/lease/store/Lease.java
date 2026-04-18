@@ -4,6 +4,7 @@ import io.disys.axis.lease.model.LeaseItem;
 import io.disys.axis.lease.model.LeaseRecord;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
@@ -81,8 +82,8 @@ public class Lease {
         return item;
     }
 
-    boolean expired() {
-        return clock.instant().isBefore(expiry);
+    void renewInProgress() {
+        renewals++;
     }
 
     void renew() {
@@ -101,5 +102,9 @@ public class Lease {
 
     public boolean hasFullTtl() {
         return remainingTtl == ttl;
+    }
+
+    public void extendExpiry(Duration extend) {
+        expiry = clock.instant().plusSeconds(remainingTtl).plus(extend);
     }
 }

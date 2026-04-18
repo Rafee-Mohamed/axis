@@ -4,11 +4,12 @@ import java.time.Duration;
 
 public record LeaseStoreConfig(
         long minLeaseTtl,
-        int leaseRevokeRate,
-        // at least should be 1
+        int revokeRate,
+        int checkpointBatchSize,
+        int checkpointBatchRate,
         Duration checkpointInterval,
-        Duration expiredLeaseRetryInterval,
         Duration minWaitTime,
+        Duration extendOnScheduleTrack,
         String leaseDb
 ) {
 }

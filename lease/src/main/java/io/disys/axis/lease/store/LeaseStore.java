@@ -63,7 +63,7 @@ public class LeaseStore {
 
     static LeaseStore from(LeaseStoreState state) {
         var leaseItems = new HashMap<LeaseItem, Long>();
-        var scheduler = new Scheduler(state.clock, state.config.checkpointInterval());
+        var scheduler = new Scheduler(state.clock, state.config);
 
         for (var lease: state.leases.values()) {
             scheduler.schedule(lease);
@@ -120,9 +120,12 @@ public class LeaseStore {
             return null;
         });
 
+        scheduler.ifPresent(s -> s.revoke(id));
+
         return new RevokeResult.LeaseRevoked(id);
     }
 
+    // renew only called when schedules are tracked - that is only by leader
     public RenewResult tryRenew(long id) {
         var lease = leases.get(id);
         if (lease == null) {
@@ -130,16 +133,37 @@ public class LeaseStore {
             return new RenewResult.LeaseNotFound(id);
         }
 
-        if (lease.expired()) {
-            // expired wait - revoke in progress or still in queue but time has passed
-            // so do we renew even after expired but expired not yet taken
-            // of deadlines
+        if (scheduler.map(s -> s.expired(lease.id())).orElse(false)) {
+            // the scheduler already surfaced this lease for expired leases
+            // so the revoke in progress therefore upstream system can wait for revoke
+            // to complete and return lease not found or can renew which will eventually fail
             return new RenewResult.LeaseRevokeInProgress(id);
         }
+
+        // if reached here means that scheduler haven't yet queried with expired
+        // but the deadline might have been reached for this lease, but it is not
+        // surfaced by the upstream system by calling expired, therefore it is safe
+        // to renew if it has full ttl in that case the lease will live again
+        // as the checkpoint is invalidated by new renewal of lease
+        // otherwise a checkpoint will be surfaced for renewal followed by
+        // surfacing expired, when renew checkpoint runs before or after,
+        // the lease will be removed by revoke surfaced by scheduler
+        // if revoke is from scheduler, and renew is in hands from client
+        // then the upstream system can check after renew and expired if tryRenew
+        // returned checkpoint and expired returned the same lease, then
+        // it has to be handled carefully, since it will fail and renew
+        // is not correct with respect to client as renew succeeded but the
+        // scheduled expiry before or after will remove the lease, therefore
+        // if lease checkpoint is surfaced then the schedule for those lease
+        // don't need to appear, as checkpoint for that lease is already surfaced
+        // if scheduler is called first, then revoke in progress will be returned
+        // and after lease checkpoint, so ordering - tryRenew -> scheduler
 
         if (!lease.hasFullTtl()) {
             // return the checkpoint to be replicated
             // time has elapsed beyond at least one checkpoint
+            // renewInProgress invalidates the lease checkpoint/deadline
+            lease.renewInProgress();
             return new RenewResult.LeaseCheckpoint(lease.id(), lease.ttl());
         }
 
@@ -183,7 +207,7 @@ public class LeaseStore {
 
     public void trackSchedules() {
         scheduler = Optional.of(scheduler.orElseGet(() ->
-                Scheduler.fromLeases(leases.values(), clock, config.checkpointInterval())));
+                Scheduler.fromLeases(leases.values(), clock, config)));
     }
 
     public void untrackSchedules() {
@@ -206,7 +230,7 @@ public class LeaseStore {
         return scheduler.map(s -> s.expired(leases)).orElseGet(List::of);
     }
 
-    private List<Checkpoint> checkpoints() {
+    private List<List<Checkpoint>> checkpoints() {
         return scheduler.map(s -> s.checkpoints(leases)).orElseGet(List::of);
     }
 
