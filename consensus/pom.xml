@@ -32,13 +32,6 @@
             <version>${project.version}</version>
         </dependency>
 
-        <!-- MVCC store - state machine -->
-        <dependency>
-            <groupId>io.disys</groupId>
-            <artifactId>mvcc</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
         <!-- gRPC transport (Netty + HTTP/2, bundled/shaded to avoid classpath conflicts) -->
         <dependency>
             <groupId>io.grpc</groupId>
@@ -78,14 +71,12 @@
     <build>
         <plugins>
             <!-- Generates Java from .proto files in src/main/protobuf/ at compile time -->
+            <!-- Adds gRPC stub generation on top of the protoc config in parent pluginManagement -->
             <plugin>
                 <groupId>io.github.ascopes</groupId>
                 <artifactId>protobuf-maven-plugin</artifactId>
-                <configuration combine.self="override">
-                    <protoc kind="binary-maven">
-                        <version>${protobuf.version}</version>
-                    </protoc>
-                    <plugins>
+                <configuration>
+                    <plugins combine.children="append">
                         <plugin kind="binary-maven">
                             <groupId>io.grpc</groupId>
                             <artifactId>protoc-gen-grpc-java</artifactId>

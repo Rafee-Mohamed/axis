@@ -11,10 +11,61 @@
 
     <artifactId>server</artifactId>
 
-    <properties>
-        <maven.compiler.source>25</maven.compiler.source>
-        <maven.compiler.target>25</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
+    <dependencies>
+        <!-- Client-facing gRPC service definitions -->
+        <dependency>
+            <groupId>io.disys</groupId>
+            <artifactId>api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Internal Raft log command format -->
+        <dependency>
+            <groupId>io.disys</groupId>
+            <artifactId>command</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Raft consensus + WAL-backed log -->
+        <dependency>
+            <groupId>io.disys</groupId>
+            <artifactId>consensus</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- MVCC state machine - direct dep, server reads and drives compaction -->
+        <dependency>
+            <groupId>io.disys</groupId>
+            <artifactId>mvcc</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Lease store - direct dep, apply loop drives grant/revoke/checkpoint -->
+        <dependency>
+            <groupId>io.disys</groupId>
+            <artifactId>lease</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- gRPC Netty transport - needed to bind the server port -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+        </dependency>
+
+        <!-- Logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j2-impl</artifactId>
+        </dependency>
+    </dependencies>
 
 </project>

@@ -9,6 +9,8 @@
     <version>0.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
     <modules>
+        <module>command</module>
+        <module>api</module>
         <module>consensus</module>
         <module>server</module>
         <module>backend</module>
@@ -75,9 +77,10 @@
         <pluginManagement>
             <plugins>
                 <!--
-                    protobuf-maven-plugin: runs protoc during compile,
-                    generates Java from .proto files in src/main/protobuf/.
-                    Auto-downloads the correct protoc binary — no OS plugin needed.
+                    protobuf-maven-plugin: runs protoc during compile.
+                    Base protoc binary is configured here. Modules that also need
+                    gRPC stub generation add protoc-gen-grpc-java in their own
+                    build section using combine.children="append" on <plugins>.
                 -->
                 <plugin>
                     <groupId>io.github.ascopes</groupId>
@@ -90,6 +93,11 @@
                             </goals>
                         </execution>
                     </executions>
+                    <configuration>
+                        <protoc kind="binary-maven">
+                            <version>${protobuf.version}</version>
+                        </protoc>
+                    </configuration>
                 </plugin>
             </plugins>
         </pluginManagement>
