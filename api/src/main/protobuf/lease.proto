@@ -1,0 +1,85 @@
+syntax = "proto3";
+package axis.api;
+option java_package = "io.disys.axis.api.proto";
+option java_multiple_files = true;
+option java_outer_classname = "LeaseProto";
+
+service LeaseService {
+    rpc Grant(GrantRequest)    returns (GrantResponse);
+    rpc Revoke(RevokeRequest)  returns (RevokeResponse);
+    rpc Renew(RenewRequest)    returns (RenewResponse);
+    rpc Info(InfoRequest)      returns (InfoResponse);
+    rpc Leases(LeasesRequest)  returns (LeasesResponse);
+}
+
+// ===================== Grant =====================
+
+// ttl is in seconds.
+message GrantRequest  { int64 ttl = 1; }
+
+// Server always assigns lease_id. ttl echoed back.
+message GrantResponse { int64 lease_id = 1; int64 ttl = 2; }
+
+// ===================== Revoke =====================
+
+message RevokeRequest { int64 lease_id = 1; }
+
+message RevokeResponse {
+    oneof result {
+        LeaseRevoked  revoked   = 1;
+        LeaseNotFound not_found = 2;
+    }
+}
+
+// ===================== Renew =====================
+
+message RenewRequest { int64 lease_id = 1; }
+
+// LeaseCheckpoint is handled internally by the server (proposes through Raft
+// before replying). The client always receives LeaseRenewed on success.
+message RenewResponse {
+    oneof result {
+        LeaseRenewed  renewed   = 1;
+        LeaseNotFound not_found = 2;
+    }
+}
+
+// ===================== Info =====================
+
+// Returns the full record for a single lease including attached keys.
+message InfoRequest { int64 lease_id = 1; }
+
+message InfoResponse {
+    oneof result {
+        LeaseDetail   found     = 1;
+        LeaseNotFound not_found = 2;
+    }
+}
+
+// Full lease detail including attached keys.
+message LeaseDetail {
+    int64          lease_id      = 1;
+    int64          ttl           = 2;
+    int64          remaining_ttl = 3;
+    repeated bytes keys          = 4;
+}
+
+// ===================== Leases =====================
+
+// Returns a summary of all active leases without attached keys.
+// Use Info to get attached keys for a specific lease.
+message LeasesRequest  {}
+
+message LeasesResponse { repeated LeaseInfo leases = 1; }
+
+message LeaseInfo {
+    int64 lease_id      = 1;
+    int64 ttl           = 2;
+    int64 remaining_ttl = 3;
+}
+
+// ===================== Shared result types =====================
+
+message LeaseRevoked  { int64 lease_id = 1; }
+message LeaseRenewed  { int64 lease_id = 1; int64 remaining_ttl = 2; }
+message LeaseNotFound { int64 lease_id = 1; }
