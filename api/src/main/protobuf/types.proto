@@ -1,0 +1,68 @@
+syntax = "proto3";
+package axis.api;
+option java_package = "io.disys.axis.api.proto";
+option java_multiple_files = true;
+option java_outer_classname = "TypesProto";
+
+// A key-value pair with its revision metadata.
+// val and lease_id are decoded by the store layer before sending -
+// the client never sees the raw MVCC encoding.
+message KeyVal {
+    bytes key               = 1;
+    bytes val               = 2;
+    int64 created_revision  = 3;
+    int64 modified_revision = 4;
+    int64 version           = 5;
+    int64 lease_id          = 6;
+}
+
+// The requested revision has been compacted away.
+message Compacted {
+    int64 first_visible_revision = 1;
+    int64 requested_revision     = 2;
+}
+
+// The requested revision is ahead of the current store.
+message Future {
+    int64 last_visible_revision = 1;
+    int64 requested_revision    = 2;
+}
+
+// A revision range [min, max] used for filtering.
+// Used as modified_in or created_in depending on the field it appears in.
+message RevisionRange {
+    int64 min = 1;
+    int64 max = 2;
+}
+
+// Options for range and keys queries.
+message RangeOptions {
+    int64         limit       = 1;
+    RevisionRange modified_in = 2;
+    RevisionRange created_in  = 3;
+    SortOrder     sort        = 4;
+}
+
+// Options for count queries - sort and limit do not apply to counts.
+message CountOptions {
+    RevisionRange modified_in = 1;
+    RevisionRange created_in  = 2;
+}
+
+message SortOrder {
+    SortTarget    target    = 1;
+    SortDirection direction = 2;
+}
+
+enum SortTarget {
+    KEY               = 0;
+    VERSION           = 1;
+    CREATED_REVISION  = 2;
+    MODIFIED_REVISION = 3;
+    VAL               = 4;
+}
+
+enum SortDirection {
+    ASCENDING  = 0;
+    DESCENDING = 1;
+}

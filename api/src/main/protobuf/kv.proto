@@ -1,0 +1,275 @@
+syntax = "proto3";
+package axis.api;
+option java_package = "io.disys.axis.api.proto";
+option java_multiple_files = true;
+option java_outer_classname = "KvProto";
+
+import "types.proto";
+
+service KvService {
+    // -- reads --
+    rpc Get(GetRequest)         returns (GetResponse);
+    rpc GetAt(GetAtRequest)     returns (GetAtResponse);
+
+    rpc Range(RangeRequest)     returns (RangeResponse);
+    rpc RangeAt(RangeAtRequest) returns (RangeAtResponse);
+
+    rpc Keys(KeysRequest)       returns (KeysResponse);
+    rpc KeysAt(KeysAtRequest)   returns (KeysAtResponse);
+
+    rpc Count(CountRequest)     returns (CountResponse);
+    rpc CountAt(CountAtRequest) returns (CountAtResponse);
+
+    // -- writes --
+    rpc Put(PutRequest)                               returns (PutResponse);
+    rpc PutAndGet(PutAndGetRequest)                   returns (PutAndGetResponse);
+    rpc PutWithLease(PutWithLeaseRequest)             returns (PutResponse);
+    rpc PutWithLeaseAndGet(PutWithLeaseAndGetRequest) returns (PutAndGetResponse);
+
+    rpc UpdateLease(UpdateLeaseRequest) returns (PutResponse);
+    rpc UpdateValue(UpdateValueRequest) returns (PutResponse);
+    rpc RemoveLease(RemoveLeaseRequest) returns (PutResponse);
+
+    rpc Delete(DeleteRequest)                        returns (DeleteResponse);
+    rpc DeleteAndGet(DeleteAndGetRequest)            returns (DeleteAndGetResponse);
+    rpc DeleteRange(DeleteRangeRequest)              returns (DeleteRangeResponse);
+    rpc DeleteRangeAndGet(DeleteRangeAndGetRequest)  returns (DeleteRangeAndGetResponse);
+
+    rpc Txn(TxnRequest)         returns (TxnResponse);
+    rpc Compact(CompactRequest) returns (CompactResponse);
+}
+
+// ===================== Get =====================
+
+message GetRequest  { bytes key = 1; }
+message GetResponse { KeyVal kv = 1; } // absent if key not found
+
+message GetAtRequest {
+    bytes key      = 1;
+    int64 revision = 2;
+}
+
+message GetAtResponse {
+    oneof result {
+        GetAtOk   ok        = 1;
+        Compacted compacted = 2;
+        Future    future    = 3;
+    }
+}
+
+// kv absent if the key did not exist at that revision
+message GetAtOk { KeyVal kv = 1; }
+
+// ===================== Range =====================
+
+message RangeRequest {
+    bytes        from    = 1;
+    bytes        to      = 2;
+    RangeOptions options = 3;
+}
+
+message RangeResponse {
+    repeated KeyVal kvs       = 1;
+    bool            more = 2;
+}
+
+message RangeAtRequest {
+    bytes        from     = 1;
+    bytes        to       = 2;
+    int64        revision = 3;
+    RangeOptions options  = 4;
+}
+
+message RangeAtResponse {
+    oneof result {
+        RangeResult ok        = 1;
+        Compacted   compacted = 2;
+        Future      future    = 3;
+    }
+}
+
+message RangeResult {
+    repeated KeyVal kvs       = 1;
+    bool            more = 2;
+}
+
+// ===================== Keys =====================
+
+message KeysRequest {
+    bytes        from    = 1;
+    bytes        to      = 2;
+    RangeOptions options = 3;
+}
+
+message KeysResponse {
+    repeated bytes keys      = 1;
+    bool           more = 2;
+}
+
+message KeysAtRequest {
+    bytes        from     = 1;
+    bytes        to       = 2;
+    int64        revision = 3;
+    RangeOptions options  = 4;
+}
+
+message KeysAtResponse {
+    oneof result {
+        KeysResult ok        = 1;
+        Compacted  compacted = 2;
+        Future     future    = 3;
+    }
+}
+
+message KeysResult {
+    repeated bytes keys      = 1;
+    bool           more = 2;
+}
+
+// ===================== Count =====================
+
+message CountRequest {
+    bytes        from    = 1;
+    bytes        to      = 2;
+    CountOptions options = 3;
+}
+
+message CountResponse { int64 count = 1; }
+
+message CountAtRequest {
+    bytes        from     = 1;
+    bytes        to       = 2;
+    int64        revision = 3;
+    CountOptions options  = 4;
+}
+
+message CountAtResponse {
+    oneof result {
+        CountResult ok        = 1;
+        Compacted   compacted = 2;
+        Future      future    = 3;
+    }
+}
+
+message CountResult { int64 count = 1; }
+
+// ===================== Put =====================
+
+message PutRequest       { bytes key = 1; bytes val = 2; }
+message PutAndGetRequest { bytes key = 1; bytes val = 2; }
+
+message PutWithLeaseRequest {
+    bytes key      = 1;
+    bytes val      = 2;
+    int64 lease_id = 3;
+}
+
+message PutWithLeaseAndGetRequest {
+    bytes key      = 1;
+    bytes val      = 2;
+    int64 lease_id = 3;
+}
+
+message PutResponse {
+    int64 revision = 1;
+}
+
+message PutAndGetResponse {
+    int64  revision = 1;
+    KeyVal prev_kv  = 2; // absent if key was new
+}
+
+// ===================== Partial updates =====================
+
+message UpdateLeaseRequest { bytes key = 1; int64 lease_id = 2; }
+message UpdateValueRequest { bytes key = 1; bytes val      = 2; }
+message RemoveLeaseRequest { bytes key = 1; }
+
+// ===================== Delete =====================
+
+message DeleteRequest        { bytes key  = 1; }
+message DeleteAndGetRequest  { bytes key  = 1; }
+
+message DeleteRangeRequest       { bytes from = 1; bytes to = 2; }
+message DeleteRangeAndGetRequest { bytes from = 1; bytes to = 2; }
+
+message DeleteResponse { bool deleted = 1; }
+
+message DeleteAndGetResponse {
+    bool   deleted = 1;
+    KeyVal prev_kv = 2;
+}
+
+message DeleteRangeResponse { int64 deleted = 1; }
+
+message DeleteRangeAndGetResponse {
+    int64           deleted  = 1;
+    repeated KeyVal prev_kvs = 2;
+}
+
+// ===================== Txn =====================
+
+message TxnRequest {
+    repeated Condition conditions = 1;
+    repeated TxnOp     success    = 2;
+    repeated TxnOp     failure    = 3;
+}
+
+message Condition {
+    bytes key = 1;
+    oneof target {
+        int64 version           = 2;
+        int64 created_revision  = 3;
+        int64 modified_revision = 4;
+        bytes val               = 5;
+        int64 lease_id          = 6;
+    }
+    CompareOp op = 7;
+}
+
+enum CompareOp {
+    EQ  = 0;
+    NE  = 1;
+    GT  = 2;
+    LT  = 3;
+    GTE = 4;
+    LTE = 5;
+}
+
+// Read ops included - their results come back in TxnOpResult.
+// The server evaluates reads at the committed revision after the Txn applies.
+message TxnOp {
+    oneof op {
+        GetRequest            get            = 1;
+        RangeRequest          range          = 2;
+        PutRequest            put            = 3;
+        PutWithLeaseRequest   put_with_lease = 4;
+        DeleteRequest         delete         = 5;
+        DeleteRangeRequest    delete_range   = 6;
+        UpdateLeaseRequest    update_lease   = 7;
+        UpdateValueRequest    update_value   = 8;
+        RemoveLeaseRequest    remove_lease   = 9;
+        TxnRequest            txn            = 10;
+    }
+}
+
+message TxnResponse {
+    bool                 succeeded = 1;
+    repeated TxnOpResult results   = 2;
+}
+
+message TxnOpResult {
+    oneof result {
+        GetResponse         get          = 1;
+        RangeResponse       range        = 2;
+        PutResponse         put          = 3;
+        DeleteResponse      delete       = 4;
+        DeleteRangeResponse delete_range = 5;
+        TxnResponse         txn          = 6;
+    }
+}
+
+// ===================== Compact =====================
+
+message CompactRequest  { int64 revision = 1; }
+message CompactResponse {}
