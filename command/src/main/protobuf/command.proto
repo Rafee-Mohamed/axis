@@ -83,11 +83,11 @@ message TxnCommand {
 message Condition {
     bytes key = 1;
     oneof target {
-        int64 version         = 2;
-        int64 create_revision = 3;
-        int64 mod_revision    = 4;
-        bytes value           = 5;
-        int64 lease_id        = 6;
+        int64 version           = 2;
+        int64 created_revision  = 3;
+        int64 modified_revision = 4;
+        bytes val               = 5;
+        int64 lease_id          = 6;
     }
     CompareOp op = 7;
 }

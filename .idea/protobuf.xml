@@ -3,6 +3,7 @@
   <component name="ProtobufSettings">
     <roots>
       <entry common="false" path="file://$PROJECT_DIR$/consensus/src/main/protobuf" />
+      <entry common="false" path="file://$PROJECT_DIR$/api/src/main/protobuf" />
     </roots>
   </component>
 </project>
