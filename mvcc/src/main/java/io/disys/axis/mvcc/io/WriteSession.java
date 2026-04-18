@@ -11,10 +11,12 @@ import io.disys.axis.mvcc.timeline.*;
 import io.disys.axis.backend.WriteTxn;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
+import java.util.stream.Stream;
 
 public class WriteSession implements Writer {
     private final WriteTxn txn;
@@ -100,21 +102,17 @@ public class WriteSession implements Writer {
         txn.put(
                 db.meta(),
                 db.meta().firstCommitSeqKey(),
-                ByteBuffer.allocate(Long.BYTES)
-                        .putLong(commitSeq)
-                        .array());
+                ByteBuffer.allocate(Long.BYTES).putLong(commitSeq).array());
         bound.compact(commitSeq);
     }
-    
-    @Override
-    public void put(byte[] key, byte[] val)  {
-        var revision = Revision.modify(bound.next(), ordinal++);
 
+    @Override
+    public void put(byte[] key, byte[] val) {
+        var revision = Revision.modify(bound.next(), ordinal++);
         var span = index.add(key, revision);
 
         var record = new Record(key, val, span);
         buffer.stage(new RevisionRecord(revision, record));
-
         txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
     }
 
@@ -128,10 +126,8 @@ public class WriteSession implements Writer {
         }
 
         var record = new Record(key, span.get());
-
         buffer.stage(new RevisionRecord(revision, record));
         txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
-
         return true;
     }
 
@@ -166,6 +162,14 @@ public class WriteSession implements Writer {
         return txn;
     }
 
+    Record get(byte[] key, Revision revision) {
+        return buffer.get(revision)
+                .map(RevisionRecord::record)
+                .or(() -> txn.get(db.revision(), encoder.encode(revision))
+                        .map(decoder::decodeRecord))
+                .orElseThrow(() ->
+                        new InconsistentStoreException.MissingRecordForRevision(key, revision, bound.start(), bound.end()));
+    }
 
     private <T> SnapshotResult<T> snapshotResultOutsideWindow(long commitSeq) {
         if (compacted(commitSeq)) {
@@ -179,181 +183,144 @@ public class WriteSession implements Writer {
         return null;
     }
 
+    // ===================== Private helpers =====================
 
-    Record get(byte[] key, Revision revision) {
-        return buffer.get(revision)
-                .map(RevisionRecord::record)
-                .or(() -> txn.get(db.revision(), encoder.encode(revision))
-                        .map(decoder::decodeRecord))
-                .orElseThrow(() ->
-                        new InconsistentStoreException.MissingRecordForRevision(key, revision, bound.start(), bound.end()));
+    private Page<Record> pageRecords(Stream<KeyRevision> stream, RangeOptions options) {
+        if (options.hasModifiedFilter()) {
+            stream = stream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
+        }
+        Stream<Record> records = stream.map(kr -> get(kr.key(), kr.revision()));
+        if (options.hasCreatedFilter()) {
+            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
+        }
+        if (!options.isKeySort()) {
+            records = records.sorted(recordComparator(options));
+        }
+        return page(records, options.limit());
+    }
+
+    private Page<byte[]> pageKeys(Stream<KeyRevision> stream, RangeOptions options) {
+        if (options.hasModifiedFilter()) {
+            stream = stream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
+        }
+        // KEY sort without createdIn: never need to load records
+        if (options.isKeySort() && !options.hasCreatedFilter()) {
+            return page(stream.map(KeyRevision::key), options.limit());
+        }
+        Stream<Record> records = stream.map(kr -> get(kr.key(), kr.revision()));
+        if (options.hasCreatedFilter()) {
+            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
+        }
+        if (!options.isKeySort()) {
+            records = records.sorted(recordComparator(options));
+        }
+        return page(records.map(Record::key), options.limit());
+    }
+
+    private <T> Page<T> page(Stream<T> stream, long limit) {
+        if (limit == RangeOptions.UNLIMITED) {
+            return new Page<>(stream.toList(), false);
+        }
+        var items = stream.limit(limit + 1).toList();
+        boolean more = items.size() > limit;
+        return new Page<>(more ? items.subList(0, (int) limit) : items, more);
+    }
+
+    private static Comparator<Record> recordComparator(RangeOptions options) {
+        Comparator<Record> base = switch (options.sortTarget()) {
+            case KEY               -> Comparator.comparing(Record::key, Arrays::compare);
+            case VERSION           -> Comparator.comparingInt(Record::version);
+            case CREATED_REVISION  -> Comparator.comparingLong(Record::createdAtSeq);
+            case MODIFIED_REVISION -> Comparator.comparingLong(Record::modifiedAtSeq);
+            case VAL               -> Comparator.comparing(Record::val, Arrays::compare);
+        };
+        return options.sortDirection() == SortDirection.DESCENDING ? base.reversed() : base;
     }
 
     @Override
     public Optional<Record> get(byte[] key) {
-        return index.revisionAt(key, bound.next())
-                .map(r -> get(key, r));
+        return index.revisionAt(key, bound.next()).map(r -> get(key, r));
     }
 
     @Override
     public SnapshotResult<Optional<Record>> getAt(byte[] key, long commitSeq) {
         var result = this.<Optional<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                index.revisionAt(key, commitSeq)
-                        .map(r -> get(key, r))
+                index.revisionAt(key, commitSeq).map(r -> get(key, r))
         );
     }
 
+    // ===================== range =====================
+
     @Override
-    public Iterable<Record> range(byte[] from, byte[] to) {
-        return index.rangeAt(from, to, bound.next())
+    public Page<Record> range(byte[] from, byte[] to) {
+        var items = index.rangeAt(from, to, bound.next())
                 .map(kr -> get(kr.key(), kr.revision()))
-                ::iterator;
+                .toList();
+        return new Page<>(items, false);
     }
 
     @Override
-    public Iterable<Record> range(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound) {
-        return index.rangeAt(from, to, bound.next())
-                .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
-                .map(kr -> get(kr.key(), kr.revision()))
-                ::iterator;
+    public Page<Record> range(byte[] from, byte[] to, RangeOptions options) {
+        return pageRecords(index.rangeAt(from, to, bound.next()), options);
     }
 
-    @Override
-    public Iterable<Record> range(byte[] from, byte[] to, long limit) {
-        return index.rangeAt(from, to, bound.next())
-                .limit(limit)
-                .map(kr -> get(kr.key(), kr.revision()))
-                ::iterator;
-    }
+    // ===================== rangeAt =====================
 
     @Override
-    public Iterable<Record> range(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
-        return index.rangeAt(from, to, bound.next())
-                .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
-                .limit(limit)
-                .map(kr -> get(kr.key(), kr.revision()))
-                ::iterator;
-    }
-
-    @Override
-    public SnapshotResult<Iterable<Record>> rangeAt(byte[] from, byte[] to, long commitSeq) {
-        var result = this.<Iterable<Record>>snapshotResultOutsideWindow(commitSeq);
+    public SnapshotResult<Page<Record>> rangeAt(byte[] from, byte[] to, long commitSeq) {
+        var result = this.<Page<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                index.rangeAt(from, to, commitSeq)
+                new Page<>(index.rangeAt(from, to, commitSeq)
                         .map(kr -> get(kr.key(), kr.revision()))
-                        ::iterator
+                        .toList(), false)
         );
     }
 
     @Override
-    public SnapshotResult<Iterable<Record>> rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
-        var result = this.<Iterable<Record>>snapshotResultOutsideWindow(commitSeq);
-        return result != null ? result :  new SnapshotResult.Ok<>(
-                index.rangeAt(from, to, commitSeq)
-                        .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
-                        .map(kr -> get(kr.key(), kr.revision()))
-                        ::iterator
-        );
-    }
-
-    @Override
-    public SnapshotResult<Iterable<Record>> rangeAt(byte[] from, byte[] to, long commitSeq, long limit) {
-        var result = this.<Iterable<Record>>snapshotResultOutsideWindow(commitSeq);
+    public SnapshotResult<Page<Record>> rangeAt(byte[] from, byte[] to, long commitSeq, RangeOptions options) {
+        var result = this.<Page<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                index.rangeAt(from, to, commitSeq)
-                        .limit(limit)
-                        .map(kr -> get(kr.key(), kr.revision()))
-                        ::iterator
+                pageRecords(index.rangeAt(from, to, commitSeq), options)
         );
     }
 
-    @Override
-    public SnapshotResult<Iterable<Record>> rangeAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
-        var result = this.<Iterable<Record>>snapshotResultOutsideWindow(commitSeq);
-        return result != null ? result :  new SnapshotResult.Ok<>(
-                index.rangeAt(from, to, commitSeq)
-                        .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
-                        .map(kr -> get(kr.key(), kr.revision()))
-                        ::iterator        
-        );
-    }
+    // ===================== keys =====================
 
     @Override
-    public Iterable<byte[]> keys(byte[] from, byte[] to) {
-        return index.rangeAt(from, to, bound.next())
+    public Page<byte[]> keys(byte[] from, byte[] to) {
+        var items = index.rangeAt(from, to, bound.next())
                 .map(KeyRevision::key)
-                ::iterator;
+                .toList();
+        return new Page<>(items, false);
     }
 
     @Override
-    public Iterable<byte[]> keys(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound) {
-        return index.rangeAt(from, to, bound.next())
-                .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
-                .map(KeyRevision::key)
-                ::iterator;
+    public Page<byte[]> keys(byte[] from, byte[] to, RangeOptions options) {
+        return pageKeys(index.rangeAt(from, to, bound.next()), options);
     }
 
-    @Override
-    public Iterable<byte[]> keys(byte[] from, byte[] to, long limit) {
-        return index.rangeAt(from, to, bound.next())
-                .limit(limit)
-                .map(KeyRevision::key)
-                ::iterator;
-    }
+    // ===================== keysAt =====================
 
     @Override
-    public Iterable<byte[]> keys(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
-        return index.rangeAt(from, to, bound.next())
-                .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
-                .limit(limit)
-                .map(KeyRevision::key)
-                ::iterator;
-    }
-
-    @Override
-    public SnapshotResult<Iterable<byte[]>> keysAt(byte[] from, byte[] to, long commitSeq) {
-        var result = this.<Iterable<byte[]>>snapshotResultOutsideWindow(commitSeq);
+    public SnapshotResult<Page<byte[]>> keysAt(byte[] from, byte[] to, long commitSeq) {
+        var result = this.<Page<byte[]>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                index.rangeAt(from, to, commitSeq)
+                new Page<>(index.rangeAt(from, to, commitSeq)
                         .map(KeyRevision::key)
-                        ::iterator
+                        .toList(), false)
         );
     }
 
     @Override
-    public SnapshotResult<Iterable<byte[]>>  keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
-        var result = this.<Iterable<byte[]>>snapshotResultOutsideWindow(commitSeq);
+    public SnapshotResult<Page<byte[]>> keysAt(byte[] from, byte[] to, long commitSeq, RangeOptions options) {
+        var result = this.<Page<byte[]>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                index.rangeAt(from, to, commitSeq)
-                        .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
-                        .map(KeyRevision::key)
-                        ::iterator
+                pageKeys(index.rangeAt(from, to, commitSeq), options)
         );
     }
 
-    @Override
-    public SnapshotResult<Iterable<byte[]>>  keysAt(byte[] from, byte[] to, long commitSeq, long limit) {
-        var result = this.<Iterable<byte[]>>snapshotResultOutsideWindow(commitSeq);
-        return result != null ? result : new SnapshotResult.Ok<>(
-                index.rangeAt(from, to, commitSeq)
-                        .limit(limit)
-                        .map(KeyRevision::key)
-                        ::iterator
-        );
-    }
-
-    @Override
-    public SnapshotResult<Iterable<byte[]>>  keysAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound, long limit) {
-        var result = this.<Iterable<byte[]>>snapshotResultOutsideWindow(commitSeq);
-        return result != null ? result : new SnapshotResult.Ok<>(
-                index.rangeAt(from, to, commitSeq)
-                        .filter(kr -> modifiedAtSeqBound.test(kr.revision()))
-                        .limit(limit)
-                        .map(KeyRevision::key)
-                        ::iterator
-        );
-    }
+    // ===================== count =====================
 
     @Override
     public long count(byte[] from, byte[] to) {
@@ -361,9 +328,24 @@ public class WriteSession implements Writer {
     }
 
     @Override
-    public long count(byte[] from, byte[] to, ModifiedAtSeqBound modifiedAtSeqBound) {
-        return index.countAt(from, to, bound.next()).filter(modifiedAtSeqBound).count();
+    public long count(byte[] from, byte[] to, CountOptions options) {
+        if (!options.hasCreatedFilter()) {
+            var stream = index.countAt(from, to, bound.next());
+            if (options.hasModifiedFilter()) {
+                stream = stream.filter(r -> options.modifiedIn().test(r.commitSeq()));
+            }
+            return stream.count();
+        }
+        Stream<KeyRevision> krStream = index.rangeAt(from, to, bound.next());
+        if (options.hasModifiedFilter()) {
+            krStream = krStream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
+        }
+        return krStream.map(kr -> get(kr.key(), kr.revision()))
+                .filter(r -> options.createdIn().test(r.createdAtSeq()))
+                .count();
     }
+
+    // ===================== countAt =====================
 
     @Override
     public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq) {
@@ -374,11 +356,25 @@ public class WriteSession implements Writer {
     }
 
     @Override
-    public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, ModifiedAtSeqBound modifiedAtSeqBound) {
+    public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, CountOptions options) {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
-        return result != null ? result : new SnapshotResult.Ok<>(
-                index.countAt(from, to, commitSeq).filter(modifiedAtSeqBound).count()
+        if (result != null) return result;
+
+        if (!options.hasCreatedFilter()) {
+            var stream = index.countAt(from, to, commitSeq);
+            if (options.hasModifiedFilter()) {
+                stream = stream.filter(r -> options.modifiedIn().test(r.commitSeq()));
+            }
+            return new SnapshotResult.Ok<>(stream.count());
+        }
+        Stream<KeyRevision> krStream = index.rangeAt(from, to, commitSeq);
+        if (options.hasModifiedFilter()) {
+            krStream = krStream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
+        }
+        return new SnapshotResult.Ok<>(
+                krStream.map(kr -> get(kr.key(), kr.revision()))
+                        .filter(r -> options.createdIn().test(r.createdAtSeq()))
+                        .count()
         );
     }
-
 }
