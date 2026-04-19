@@ -148,6 +148,9 @@ public class CommitBoundedReader implements Reader {
         if (options.hasCreatedFilter()) {
             records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
         }
+        if (options.hasVersionFilter()) {
+            records = records.filter(r -> options.versionIn().test(r.version()));
+        }
         if (!options.isKeySort()) {
             records = records.sorted(recordComparator(options));
         }
@@ -158,13 +161,16 @@ public class CommitBoundedReader implements Reader {
         if (options.hasModifiedFilter()) {
             stream = stream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
         }
-        // KEY sort without createdIn: never need to load records
-        if (options.isKeySort() && !options.hasCreatedFilter()) {
+        // KEY sort without createdIn and without versionIn: never need to load records
+        if (options.isKeySort() && !options.hasCreatedFilter() && !options.hasVersionFilter()) {
             return page(stream.map(KeyRevision::key), options.limit());
         }
         Stream<Record> records = stream.map(kr -> get(kr.key(), kr.revision()));
         if (options.hasCreatedFilter()) {
             records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
+        }
+        if (options.hasVersionFilter()) {
+            records = records.filter(r -> options.versionIn().test(r.version()));
         }
         if (!options.isKeySort()) {
             records = records.sorted(recordComparator(options));
@@ -271,7 +277,7 @@ public class CommitBoundedReader implements Reader {
 
     @Override
     public long count(byte[] from, byte[] to, CountOptions options) {
-        if (!options.hasCreatedFilter()) {
+        if (!options.hasCreatedFilter() && !options.hasVersionFilter()) {
             var stream = index.pinnedCountAt(from, to, lastCommitSeq);
             if (options.hasModifiedFilter()) {
                 stream = stream.filter(r -> options.modifiedIn().test(r.commitSeq()));
@@ -282,9 +288,14 @@ public class CommitBoundedReader implements Reader {
         if (options.hasModifiedFilter()) {
             krStream = krStream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
         }
-        return krStream.map(kr -> get(kr.key(), kr.revision()))
-                .filter(r -> options.createdIn().test(r.createdAtSeq()))
-                .count();
+        Stream<Record> records = krStream.map(kr -> get(kr.key(), kr.revision()));
+        if (options.hasCreatedFilter()) {
+            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
+        }
+        if (options.hasVersionFilter()) {
+            records = records.filter(r -> options.versionIn().test(r.version()));
+        }
+        return records.count();
     }
 
     // ===================== countAt =====================
@@ -302,7 +313,7 @@ public class CommitBoundedReader implements Reader {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
         if (result != null) return result;
 
-        if (!options.hasCreatedFilter()) {
+        if (!options.hasCreatedFilter() && !options.hasVersionFilter()) {
             var stream = index.pinnedCountAt(from, to, commitSeq);
             if (options.hasModifiedFilter()) {
                 stream = stream.filter(r -> options.modifiedIn().test(r.commitSeq()));
@@ -313,11 +324,14 @@ public class CommitBoundedReader implements Reader {
         if (options.hasModifiedFilter()) {
             krStream = krStream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
         }
-        return new SnapshotResult.Ok<>(
-                krStream.map(kr -> get(kr.key(), kr.revision()))
-                        .filter(r -> options.createdIn().test(r.createdAtSeq()))
-                        .count()
-        );
+        Stream<Record> records = krStream.map(kr -> get(kr.key(), kr.revision()));
+        if (options.hasCreatedFilter()) {
+            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
+        }
+        if (options.hasVersionFilter()) {
+            records = records.filter(r -> options.versionIn().test(r.version()));
+        }
+        return new SnapshotResult.Ok<>(records.count());
     }
 
     // ===================== handle / close =====================

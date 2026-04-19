@@ -193,6 +193,9 @@ public class WriteSession implements Writer {
         if (options.hasCreatedFilter()) {
             records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
         }
+        if (options.hasVersionFilter()) {
+            records = records.filter(r -> options.versionIn().test(r.version()));
+        }
         if (!options.isKeySort()) {
             records = records.sorted(recordComparator(options));
         }
@@ -203,13 +206,16 @@ public class WriteSession implements Writer {
         if (options.hasModifiedFilter()) {
             stream = stream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
         }
-        // KEY sort without createdIn: never need to load records
-        if (options.isKeySort() && !options.hasCreatedFilter()) {
+        // KEY sort without createdIn and without versionIn: never need to load records
+        if (options.isKeySort() && !options.hasCreatedFilter() && !options.hasVersionFilter()) {
             return page(stream.map(KeyRevision::key), options.limit());
         }
         Stream<Record> records = stream.map(kr -> get(kr.key(), kr.revision()));
         if (options.hasCreatedFilter()) {
             records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
+        }
+        if (options.hasVersionFilter()) {
+            records = records.filter(r -> options.versionIn().test(r.version()));
         }
         if (!options.isKeySort()) {
             records = records.sorted(recordComparator(options));
@@ -228,11 +234,11 @@ public class WriteSession implements Writer {
 
     private static Comparator<Record> recordComparator(RangeOptions options) {
         Comparator<Record> base = switch (options.sortTarget()) {
-            case KEY               -> Comparator.comparing(Record::key, Arrays::compare);
-            case VERSION           -> Comparator.comparingInt(Record::version);
-            case CREATED_REVISION  -> Comparator.comparingLong(Record::createdAtSeq);
+            case KEY -> Comparator.comparing(Record::key, Arrays::compare);
+            case VERSION -> Comparator.comparingInt(Record::version);
+            case CREATED_REVISION -> Comparator.comparingLong(Record::createdAtSeq);
             case MODIFIED_REVISION -> Comparator.comparingLong(Record::modifiedAtSeq);
-            case VAL               -> Comparator.comparing(Record::val, Arrays::compare);
+            case VAL -> Comparator.comparing(Record::val, Arrays::compare);
         };
         return options.sortDirection() == SortDirection.DESCENDING ? base.reversed() : base;
     }
@@ -329,7 +335,7 @@ public class WriteSession implements Writer {
 
     @Override
     public long count(byte[] from, byte[] to, CountOptions options) {
-        if (!options.hasCreatedFilter()) {
+        if (!options.hasCreatedFilter() && !options.hasVersionFilter()) {
             var stream = index.countAt(from, to, bound.next());
             if (options.hasModifiedFilter()) {
                 stream = stream.filter(r -> options.modifiedIn().test(r.commitSeq()));
@@ -340,9 +346,14 @@ public class WriteSession implements Writer {
         if (options.hasModifiedFilter()) {
             krStream = krStream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
         }
-        return krStream.map(kr -> get(kr.key(), kr.revision()))
-                .filter(r -> options.createdIn().test(r.createdAtSeq()))
-                .count();
+        Stream<Record> records = krStream.map(kr -> get(kr.key(), kr.revision()));
+        if (options.hasCreatedFilter()) {
+            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
+        }
+        if (options.hasVersionFilter()) {
+            records = records.filter(r -> options.versionIn().test(r.version()));
+        }
+        return records.count();
     }
 
     // ===================== countAt =====================
@@ -360,7 +371,7 @@ public class WriteSession implements Writer {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
         if (result != null) return result;
 
-        if (!options.hasCreatedFilter()) {
+        if (!options.hasCreatedFilter() && !options.hasVersionFilter()) {
             var stream = index.countAt(from, to, commitSeq);
             if (options.hasModifiedFilter()) {
                 stream = stream.filter(r -> options.modifiedIn().test(r.commitSeq()));
@@ -371,10 +382,13 @@ public class WriteSession implements Writer {
         if (options.hasModifiedFilter()) {
             krStream = krStream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
         }
-        return new SnapshotResult.Ok<>(
-                krStream.map(kr -> get(kr.key(), kr.revision()))
-                        .filter(r -> options.createdIn().test(r.createdAtSeq()))
-                        .count()
-        );
+        Stream<Record> records = krStream.map(kr -> get(kr.key(), kr.revision()));
+        if (options.hasCreatedFilter()) {
+            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
+        }
+        if (options.hasVersionFilter()) {
+            records = records.filter(r -> options.versionIn().test(r.version()));
+        }
+        return new SnapshotResult.Ok<>(records.count());
     }
 }
