@@ -9,7 +9,6 @@
     <version>0.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
     <modules>
-        <module>command</module>
         <module>api</module>
         <module>consensus</module>
         <module>server</module>

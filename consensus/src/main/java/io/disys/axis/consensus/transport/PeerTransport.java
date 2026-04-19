@@ -12,12 +12,12 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 
-public final class GrpcPeerTransport {
+public final class PeerTransport {
 
     private final Server server;
     private final Map<NodeId, PeerConnection> connections;
 
-    public GrpcPeerTransport(int localPort, Map<NodeId, InetSocketAddress> peers, Consumer<Message.Peer> receiver) {
+    public PeerTransport(int localPort, Map<NodeId, InetSocketAddress> peers, Consumer<Message.Peer> receiver) {
         this.server = ServerBuilder.forPort(localPort)
                 .addService(new RaftTransportService(receiver))
                 .build();

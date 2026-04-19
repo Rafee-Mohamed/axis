@@ -19,13 +19,6 @@
             <version>${project.version}</version>
         </dependency>
 
-        <!-- Internal Raft log command format -->
-        <dependency>
-            <groupId>io.disys</groupId>
-            <artifactId>command</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
         <!-- Raft consensus + WAL-backed log -->
         <dependency>
             <groupId>io.disys</groupId>
