@@ -88,18 +88,6 @@ public class LeaseStore {
         );
     }
 
-
-    public GrantResult grant(WriteHandle wh, long ttl) {
-        // should generate randomly
-        var id = rand.nextLong(1, Long.MAX_VALUE);
-
-        while (leases.containsKey(id)) {
-            id = rand.nextLong(1, Long.MAX_VALUE);
-        }
-
-        return grant(wh, id, ttl);
-    }
-
     public GrantResult grant(WriteHandle wh, long id, long ttl) {
         if (leases.containsKey(id)) {
             return new GrantResult.LeaseAlreadyExists(id);
@@ -194,7 +182,7 @@ public class LeaseStore {
 
     public KeyDetachResult detach(long id, byte[] key) {
         var l = leases.computeIfPresent(id, (_, lease) -> {
-            leaseItems.remove(lease.attach(key));
+            leaseItems.remove(lease.detach(key));
             return lease;
         });
 
