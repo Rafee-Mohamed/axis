@@ -1,141 +1,35 @@
 syntax = "proto3";
-package axis.command;
+package axis.api;
 option java_package = "io.disys.axis.consensus.proto";
 option java_multiple_files = true;
 option java_outer_classname = "CommandProto";
 
-// Top-level wrapper for all commands replicated through the Raft log.
-// command_id correlates a committed entry back to the waiting future
-// on the node that proposed it.
+import "kv.proto";
+import "lease.proto";
+
 message Command {
     int64 command_id = 1;
     oneof type {
-        PutCommand             put              = 2;
-        PutWithLeaseCommand    put_with_lease   = 3;
-        DeleteCommand          delete           = 4;
-        DeleteRangeCommand     delete_range     = 5;
-        UpdateLeaseCommand     update_lease     = 6;
-        UpdateValueCommand     update_value     = 7;
-        RemoveLeaseCommand     remove_lease     = 8;
-        TxnCommand             txn              = 9;
-        LeaseGrantCommand      lease_grant      = 10;
-        LeaseRevokeCommand     lease_revoke     = 11;
-        LeaseCheckpointCommand lease_checkpoint = 12;
-        CompactCommand         compact          = 13;
+        PutRequest                  put                    = 2;
+        PutAndGetRequest            put_and_get            = 3;
+        PutWithLeaseRequest         put_with_lease         = 4;
+        PutWithLeaseAndGetRequest   put_with_lease_and_get = 5;
+        UpdateLeaseRequest          update_lease           = 6;
+        UpdateValueRequest          update_value           = 7;
+        RemoveLeaseRequest          remove_lease           = 8;
+        DeleteRequest               delete                 = 9;
+        DeleteAndGetRequest         delete_and_get         = 10;
+        DeleteRangeRequest          delete_range           = 11;
+        DeleteRangeAndGetRequest    delete_range_and_get   = 12;
+        TxnRequest                  txn                    = 13;
+        CompactRequest              compact                = 14;
+        GrantRequest                lease_grant            = 15;
+        RevokeRequest               lease_revoke           = 16;
+        LeaseCheckpoint             lease_checkpoint       = 17;
     }
 }
 
-message PutCommand {
-    bytes key = 1;
-    bytes val = 2;
-}
-
-message PutWithLeaseCommand {
-    bytes key      = 1;
-    bytes val      = 2;
-    int64 lease_id = 3;
-}
-
-// Delete a single key.
-message DeleteCommand {
-    bytes key = 1;
-}
-
-// Delete all keys in [from, to).
-message DeleteRangeCommand {
-    bytes from = 1;
-    bytes to   = 2;
-}
-
-// Update the lease on a key, keeping the existing value unchanged.
-// The apply loop reads the current encoded value from MVCC, strips the
-// old lease_id, reencodes with this lease_id, and writes.
-message UpdateLeaseCommand {
-    bytes key      = 1;
-    int64 lease_id = 2;
-}
-
-// Remove the lease from a key, keeping the existing value unchanged.
-// The apply loop reads the current encoded value, reencodes with lease_id = 0.
-message RemoveLeaseCommand {
-    bytes key = 1;
-}
-
-// Update the payload of a key, keeping the existing lease unchanged.
-// The apply loop reads the current encoded value from MVCC, strips the
-// payload, reencodes with the existing lease_id and this val, and writes.
-message UpdateValueCommand {
-    bytes key = 1;
-    bytes val = 2;
-}
-
-// Atomic conditional transaction.
-// All conditions are evaluated at apply time; if all hold, success ops are
-// applied, otherwise failure ops are applied.
-message TxnCommand {
-    repeated Condition conditions = 1;
-    repeated WriteOp   success    = 2;
-    repeated WriteOp   failure    = 3;
-}
-
-// Reads the target field of key at apply time and compares it against
-// the expected value using op.
-message Condition {
-    bytes key = 1;
-    oneof target {
-        int64 version           = 2;
-        int64 created_revision  = 3;
-        int64 modified_revision = 4;
-        bytes val               = 5;
-        int64 lease_id          = 6;
-    }
-    CompareOp op = 7;
-}
-
-enum CompareOp {
-    EQ  = 0;
-    NE  = 1;
-    GT  = 2;
-    LT  = 3;
-    GTE = 4;
-    LTE = 5;
-}
-
-// A single mutation within a Txn branch.
-// Read ops requested alongside mutations are handled by the server
-// after commit using *At MVCC queries at the committed revision.
-message WriteOp {
-    oneof op {
-        PutCommand          put            = 1;
-        PutWithLeaseCommand put_with_lease = 2;
-        DeleteCommand       delete         = 3;
-        DeleteRangeCommand  delete_range   = 4;
-        UpdateLeaseCommand  update_lease   = 5;
-        UpdateValueCommand  update_value   = 6;
-        RemoveLeaseCommand  remove_lease   = 7;
-        TxnCommand          txn            = 8;
-    }
-}
-
-// Grant a lease. The server always generates lease_id before proposing.
-message LeaseGrantCommand {
-    int64 lease_id = 1;
-    int64 ttl      = 2;
-}
-
-// Revoke a lease and detach all keys attached to it.
-message LeaseRevokeCommand {
-    int64 lease_id = 1;
-}
-
-// Checkpoint the remaining TTL of a lease.
-// Proposed when tryRenew returns LeaseCheckpoint.
-message LeaseCheckpointCommand {
+message LeaseCheckpoint {
     int64 lease_id      = 1;
     int64 remaining_ttl = 2;
-}
-
-// Compact MVCC history up to and including revision.
-message CompactCommand {
-    int64 revision = 1;
 }

@@ -14,8 +14,8 @@ service LeaseService {
 
 // ===================== Grant =====================
 
-// ttl is in seconds.
-message GrantRequest  { int64 ttl = 1; }
+// ttl is in seconds. lease_id is optional — 0 means the server assigns one.
+message GrantRequest  { int64 lease_id = 1; int64 ttl = 2; }
 
 // Server always assigns lease_id. ttl echoed back.
 message GrantResponse { int64 lease_id = 1; int64 ttl = 2; }

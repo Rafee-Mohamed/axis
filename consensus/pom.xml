@@ -95,6 +95,13 @@
                 <groupId>io.github.ascopes</groupId>
                 <artifactId>protobuf-maven-plugin</artifactId>
                 <configuration>
+                    <importDependencies>
+                        <importDependency>
+                            <groupId>io.disys</groupId>
+                            <artifactId>api</artifactId>
+                            <version>${project.version}</version>
+                        </importDependency>
+                    </importDependencies>
                     <plugins combine.children="append">
                         <plugin kind="binary-maven">
                             <groupId>io.grpc</groupId>

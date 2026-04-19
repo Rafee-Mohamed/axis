@@ -15,14 +15,12 @@ public class LeaseStoreState {
     final Map<Long, Lease> leases;
     final LeaseBackendHandle bh;
     final LeaseStoreConfig config;
-    final RandomGenerator rand;
 
-    public LeaseStoreState(Clock clock, Map<Long, Lease> leases, LeaseBackendHandle bh, LeaseStoreConfig config, RandomGenerator rand) {
+    public LeaseStoreState(Clock clock, Map<Long, Lease> leases, LeaseBackendHandle bh, LeaseStoreConfig config) {
         this.clock = clock;
         this.leases = leases;
         this.bh = bh;
         this.config = config;
-        this.rand = rand;
     }
 
     public Consumer<Record> storeRecordConsumer() {

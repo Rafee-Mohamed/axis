@@ -3,7 +3,8 @@ package io.disys.axis.consensus.executor;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Generates cluster-unique 64-bit command IDs.
+ * Generates cluster-unique 64-bit IDs for commands, leases, and any other
+ * entity requiring a node-scoped unique identifier.
  *
  * <h2>Layout</h2>
  * <pre>
@@ -11,17 +12,17 @@ import java.util.concurrent.atomic.AtomicLong;
  *       63..48             47..8                 7..0
  * </pre>
  *
- * <p>Only the lower 16 bits of the node's long ID are used - sufficient
+ * <p>Only the lower 16 bits of the node's long ID are used — sufficient
  * for any realistic cluster size. The suffix (timestamp + counter) is
  * seeded once from the wall clock at construction and then incremented
- * atomically on every call - no further clock reads required.</p>
+ * atomically on every call — no further clock reads required.</p>
  *
  * <p>The counter allows 256 IDs per ms; overflow carries into the timestamp
  * field, borrowing from future milliseconds rather than wrapping. IDs
  * generated after a restart are numerically higher than pre-restart IDs
  * as long as at least 1 ms has elapsed between shutdown and startup.</p>
  */
-public final class CommandIdGenerator {
+public final class UIdGenerator {
 
     /**
      * Mask of 48 ones in the low bits — {@code (1L << 48) - 1}.
@@ -36,7 +37,7 @@ public final class CommandIdGenerator {
     /** Monotonically increasing suffix; bits 47..8 hold timestamp ms, bits 7..0 hold the counter. */
     private final AtomicLong suffix;
 
-    CommandIdGenerator(long nodeId, long nowEpochMs) {
+    public UIdGenerator(long nodeId, long nowEpochMs) {
         // 0xFFFFL masks off all but the lower 16 bits of nodeId;
         // << 48 places those 16 bits at positions 63..48.
         this.prefix = (nodeId & 0xFFFFL) << 48;
@@ -50,15 +51,15 @@ public final class CommandIdGenerator {
     }
 
     /**
-     * Returns the next unique command ID.
+     * Returns the next cluster-unique ID.
      *
      * <p>Atomically increments the suffix and combines it with the
      * fixed prefix. The suffix is masked to 48 bits before combining
      * to ensure it never overlaps with the node ID in bits 63..48.</p>
      *
-     * @return a cluster-unique command ID
+     * @return a cluster-unique ID
      */
-    long next() {
+    public long next() {
         long s = suffix.incrementAndGet();
         return prefix | (s & SUFFIX_MASK);
     }

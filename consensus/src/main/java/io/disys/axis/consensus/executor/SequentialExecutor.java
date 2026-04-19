@@ -3,7 +3,6 @@ package io.disys.axis.consensus.executor;
 import io.disys.axis.api.proto.*;
 import io.disys.axis.consensus.model.RaftPayload;
 import io.disys.axis.consensus.proto.Command;
-import io.disys.axis.consensus.proto.PutCommand;
 import io.disys.axis.consensus.transport.PeerTransport;
 import io.disys.axis.lease.store.LeaseStore;
 import io.disys.axis.mvcc.store.VersionedStore;
@@ -16,6 +15,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 public final class SequentialExecutor {
     private final Node<RaftPayload, Long> node;
@@ -25,7 +25,7 @@ public final class SequentialExecutor {
     private final LeaseStore leaseStore;
     private final PeerTransport transport;
     private final Map<Long, Object> responses;
-    private final CommandIdGenerator idGen;
+    private final UIdGenerator uid;
     private volatile VolatileState volatileState;
 
     public SequentialExecutor(
@@ -34,7 +34,7 @@ public final class SequentialExecutor {
             VersionedStore store,
             LeaseStore leaseStore,
             PeerTransport transport,
-            CommandIdGenerator idGen
+            UIdGenerator uid
     ) {
         this.node = node;
         this.wal = wal;
@@ -42,86 +42,125 @@ public final class SequentialExecutor {
         this.leaseStore = leaseStore;
         this.transport = transport;
         this.responses = new ConcurrentHashMap<>();
-        this.idGen = idGen;
+        this.uid = uid;
         this.reader = new StoreReader(store);
         this.volatileState = new VolatileState(RoleType.FOLLOWER, Optional.empty());
     }
 
     // ===================== Reads =====================
 
+    private <T> CompletableFuture<T> read(Supplier<T> fn) throws InterruptedException {
+        return node.readIndex().thenApply(_ -> fn.get());
+    }
+
     public CompletableFuture<GetResponse> get(GetRequest req) throws InterruptedException {
-        return node.readIndex().thenApply(_ -> reader.get(req));
+        return read(() -> reader.get(req));
     }
 
     public CompletableFuture<GetAtResponse> getAt(GetAtRequest req) throws InterruptedException {
-        return node.readIndex().thenApply(_ -> reader.getAt(req));
+        return read(() -> reader.getAt(req));
     }
 
     public CompletableFuture<RangeResponse> range(RangeRequest req) throws InterruptedException {
-        return node.readIndex().thenApply(_ -> reader.range(req));
+        return read(() -> reader.range(req));
     }
 
     public CompletableFuture<RangeAtResponse> rangeAt(RangeAtRequest req) throws InterruptedException {
-        return node.readIndex().thenApply(_ -> reader.rangeAt(req));
+        return read(() -> reader.rangeAt(req));
     }
 
     public CompletableFuture<KeysResponse> keys(KeysRequest req) throws InterruptedException {
-        return node.readIndex().thenApply(_ -> reader.keys(req));
+        return read(() -> reader.keys(req));
     }
 
     public CompletableFuture<KeysAtResponse> keysAt(KeysAtRequest req) throws InterruptedException {
-        return node.readIndex().thenApply(_ -> reader.keysAt(req));
+        return read(() -> reader.keysAt(req));
     }
 
     public CompletableFuture<CountResponse> count(CountRequest req) throws InterruptedException {
-        return node.readIndex().thenApply(_ -> reader.count(req));
+        return read(() -> reader.count(req));
     }
 
     public CompletableFuture<CountAtResponse> countAt(CountAtRequest req) throws InterruptedException {
-        return node.readIndex().thenApply(_ -> reader.countAt(req));
+        return read(() -> reader.countAt(req));
     }
 
     // ===================== Writes =====================
 
-    public CompletableFuture<PutResponse> put(PutRequest request) throws InterruptedException {
-        var put = PutCommand.newBuilder()
-                .setKey(request.getKey())
-                .setVal(KeyValCodec.encode(request.getVal()));
-
-        var cmd = Command.newBuilder()
-                .setCommandId(idGen.next())
-                .setPut(put)
-                .build();
-
-        return node.propose(new RaftPayload(cmd))
-                .thenApply(_ -> (PutResponse) responses.remove(cmd.getCommandId()));
+    private <T> CompletableFuture<T> propose(Command cmd) throws InterruptedException {
+        var payload = new RaftPayload(cmd);
+        return node.propose(payload)
+                .thenApply(_ -> {
+                    @SuppressWarnings("unchecked")
+                    T response = (T) responses.remove(payload.id());
+                    return response;
+                });
     }
 
-    public CompletableFuture<PutAndGetResponse> putAndGet(PutAndGetRequest request) { throw new UnsupportedOperationException(); }
+    private Command.Builder nextCommand() {
+        return Command.newBuilder().setCommandId(uid.next());
+    }
 
-    public CompletableFuture<PutResponse> putWithLease(PutWithLeaseRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<PutResponse> put(PutRequest request) throws InterruptedException {
+        return propose(nextCommand().setPut(request).build());
+    }
 
-    public CompletableFuture<PutAndGetResponse> putWithLeaseAndGet(PutWithLeaseAndGetRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<PutAndGetResponse> putAndGet(PutAndGetRequest request) throws InterruptedException {
+        return propose(nextCommand().setPutAndGet(request).build());
+    }
 
-    public CompletableFuture<PutResponse> updateLease(UpdateLeaseRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<PutResponse> putWithLease(PutWithLeaseRequest request) throws InterruptedException {
+        return propose(nextCommand().setPutWithLease(request).build());
+    }
 
-    public CompletableFuture<PutResponse> updateValue(UpdateValueRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<PutAndGetResponse> putWithLeaseAndGet(PutWithLeaseAndGetRequest request) throws InterruptedException {
+        return propose(nextCommand().setPutWithLeaseAndGet(request).build());
+    }
 
-    public CompletableFuture<PutResponse> removeLease(RemoveLeaseRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<PutResponse> updateLease(UpdateLeaseRequest request) throws InterruptedException {
+        return propose(nextCommand().setUpdateLease(request).build());
+    }
 
-    public CompletableFuture<DeleteResponse> delete(DeleteRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<PutResponse> updateValue(UpdateValueRequest request) throws InterruptedException {
+        return propose(nextCommand().setUpdateValue(request).build());
+    }
 
-    public CompletableFuture<DeleteAndGetResponse> deleteAndGet(DeleteAndGetRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<PutResponse> removeLease(RemoveLeaseRequest request) throws InterruptedException {
+        return propose(nextCommand().setRemoveLease(request).build());
+    }
 
-    public CompletableFuture<DeleteRangeResponse> deleteRange(DeleteRangeRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<DeleteResponse> delete(DeleteRequest request) throws InterruptedException {
+        return propose(nextCommand().setDelete(request).build());
+    }
 
-    public CompletableFuture<DeleteRangeAndGetResponse> deleteRangeAndGet(DeleteRangeAndGetRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<DeleteAndGetResponse> deleteAndGet(DeleteAndGetRequest request) throws InterruptedException {
+        return propose(nextCommand().setDeleteAndGet(request).build());
+    }
 
-    public CompletableFuture<TxnResponse> txn(TxnRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<DeleteRangeResponse> deleteRange(DeleteRangeRequest request) throws InterruptedException {
+        return propose(nextCommand().setDeleteRange(request).build());
+    }
 
-    public CompletableFuture<CompactResponse> compact(CompactRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<DeleteRangeAndGetResponse> deleteRangeAndGet(DeleteRangeAndGetRequest request) throws InterruptedException {
+        return propose(nextCommand().setDeleteRangeAndGet(request).build());
+    }
 
-    public CompletableFuture<GrantResponse> leaseGrant(GrantRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<TxnResponse> txn(TxnRequest request) throws InterruptedException {
+        return propose(nextCommand().setTxn(request).build());
+    }
 
-    public CompletableFuture<RevokeResponse> leaseRevoke(RevokeRequest request) { throw new UnsupportedOperationException(); }
+    public CompletableFuture<CompactResponse> compact(CompactRequest request) throws InterruptedException {
+        return propose(nextCommand().setCompact(request).build());
+    }
+
+    public CompletableFuture<GrantResponse> leaseGrant(GrantRequest request) throws InterruptedException {
+        var populated = request.getLeaseId() == 0
+                ? request.toBuilder().setLeaseId(uid.next()).build()
+                : request;
+        return propose(nextCommand().setLeaseGrant(populated).build());
+    }
+
+    public CompletableFuture<RevokeResponse> leaseRevoke(RevokeRequest request) throws InterruptedException {
+        return propose(nextCommand().setLeaseRevoke(request).build());
+    }
 }

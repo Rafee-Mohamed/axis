@@ -20,7 +20,6 @@ public class LeaseStore {
     private final LeaseStoreConfig config;
     private final LeaseDataEncoder encoder;
     private final LeaseDataDecoder decoder;
-    private final RandomGenerator rand;
     private final Database db;
 
 
@@ -32,8 +31,7 @@ public class LeaseStore {
             LeaseStoreConfig config,
             LeaseDataEncoder encoder,
             LeaseDataDecoder decoder,
-            Database db,
-            RandomGenerator rand
+            Database db
     ) {
         this.clock = clock;
         this.leases = leases;
@@ -43,10 +41,9 @@ public class LeaseStore {
         this.encoder = encoder;
         this.decoder = decoder;
         this.db = db;
-        this.rand = rand;
     }
 
-    public static LeaseStoreState restoreState(Backend backend, LeaseStoreConfig config, Clock clock, RandomGenerator rand) {
+    public static LeaseStoreState restoreState(Backend backend, LeaseStoreConfig config, Clock clock) {
         var db = Database.of(config.leaseDb());
         var encoder = new LeaseDataEncoder();
         var decoder = new LeaseDataDecoder();
@@ -58,7 +55,7 @@ public class LeaseStore {
             bh.consumeLeases(txn, (id, record) -> leases.put(id, Lease.restore(id, record, clock)));
         }
 
-        return new LeaseStoreState(clock, leases, bh, config, rand);
+        return new LeaseStoreState(clock, leases, bh, config);
     }
 
     static LeaseStore from(LeaseStoreState state) {
@@ -83,8 +80,7 @@ public class LeaseStore {
                 state.config,
                 encoder,
                 decoder,
-                Database.of(state.config.leaseDb()),
-                state.rand
+                Database.of(state.config.leaseDb())
         );
     }
 

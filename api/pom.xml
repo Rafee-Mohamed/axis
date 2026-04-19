@@ -29,6 +29,11 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/protobuf</directory>
+            </resource>
+        </resources>
         <plugins>
             <!-- Adds gRPC stub generation on top of the protoc config in parent pluginManagement -->
             <plugin>
