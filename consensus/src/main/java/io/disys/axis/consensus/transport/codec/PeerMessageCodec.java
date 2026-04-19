@@ -1,7 +1,7 @@
 package io.disys.axis.consensus.transport.codec;
 
 import com.google.protobuf.InvalidProtocolBufferException;
-import io.disys.axis.consensus.RaftPayload;
+import io.disys.axis.consensus.model.RaftPayload;
 import io.disys.axis.consensus.log.WalDecodeException;
 import io.disys.axis.consensus.proto.AppendEntries;
 import io.disys.axis.consensus.proto.AppendEntriesResponse;

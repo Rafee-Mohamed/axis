@@ -1,6 +1,6 @@
 syntax = "proto3";
 package axis.command;
-option java_package = "io.disys.axis.command.proto";
+option java_package = "io.disys.axis.consensus.proto";
 option java_multiple_files = true;
 option java_outer_classname = "CommandProto";
 

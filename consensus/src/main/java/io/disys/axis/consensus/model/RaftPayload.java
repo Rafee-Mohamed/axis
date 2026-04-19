@@ -1,8 +1,8 @@
-package io.disys.axis.consensus;
+package io.disys.axis.consensus.model;
 
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
-import io.disys.axis.command.proto.Command;
+import io.disys.axis.consensus.proto.Command;
 import io.disys.jaft.node.tracker.TrackablePayload;
 
 public record RaftPayload(Command command) implements TrackablePayload<Long> {
