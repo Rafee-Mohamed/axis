@@ -8,6 +8,7 @@ import io.disys.axis.consensus.transport.codec.EntryCodec;
 import io.disys.jaft.engine.PersistentState;
 import io.disys.jaft.node.task.PersistTask;
 import io.disys.jaft.storage.*;
+import io.disys.jaft.core.Snapshot;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -97,6 +98,7 @@ public final class SequentialRaftLog implements LogStorage {
                             log.warn("Skipping WAL record with no type set during recovery");
                 }
             }
+            view.close();
             view = recovery.next();
         }
 
@@ -134,7 +136,7 @@ public final class SequentialRaftLog implements LogStorage {
     }
 
     @Override
-    public io.disys.jaft.core.Snapshot snapshot() throws StorageException {
+    public Snapshot snapshot() throws StorageException {
         return mem.snapshot();
     }
 

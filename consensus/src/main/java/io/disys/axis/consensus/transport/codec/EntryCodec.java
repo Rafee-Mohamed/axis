@@ -1,7 +1,8 @@
 package io.disys.axis.consensus.transport.codec;
 
-import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
 import io.disys.axis.consensus.RaftPayload;
+import io.disys.axis.consensus.log.WalDecodeException;
 import io.disys.jaft.storage.Entry;
 
 // NOTE: jaft and proto both define a class named Entry.
@@ -28,7 +29,7 @@ public final class EntryCodec {
                         .setData(io.disys.axis.consensus.proto.Entry.Data.newBuilder()
                                 .setTerm(d.term())
                                 .setIndex(d.index())
-                                .setData(ByteString.copyFrom(payload.data()))
+                                .setData(payload.data())
                                 .build())
                         .build();
             }
@@ -57,11 +58,17 @@ public final class EntryCodec {
                     proto.getPlaceholder().getIndex()
             );
 
-            case DATA -> new Entry.Data(
-                    proto.getData().getTerm(),
-                    proto.getData().getIndex(),
-                    new RaftPayload(proto.getData().getData().toByteArray())
-            );
+            case DATA -> {
+                try {
+                    yield new Entry.Data(
+                            proto.getData().getTerm(),
+                            proto.getData().getIndex(),
+                            RaftPayload.decode(proto.getData().getData())
+                    );
+                } catch (InvalidProtocolBufferException e) {
+                    throw new WalDecodeException(e);
+                }
+            }
 
             case MEMBERSHIP_CHANGE -> new Entry.MembershipChange(
                     proto.getMembershipChange().getTerm(),

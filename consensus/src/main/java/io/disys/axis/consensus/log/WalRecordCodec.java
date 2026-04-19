@@ -76,9 +76,7 @@ public final class WalRecordCodec {
      */
     public static WalRecord decode(ByteBuffer buf) {
         try {
-            byte[] bytes = new byte[buf.remaining()];
-            buf.get(bytes);
-            return WalRecord.parseFrom(bytes);
+            return WalRecord.parseFrom(buf);
         } catch (InvalidProtocolBufferException e) {
             throw new WalDecodeException(e);
         }

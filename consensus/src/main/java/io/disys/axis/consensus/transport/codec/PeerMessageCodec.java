@@ -1,7 +1,8 @@
 package io.disys.axis.consensus.transport.codec;
 
-import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
 import io.disys.axis.consensus.RaftPayload;
+import io.disys.axis.consensus.log.WalDecodeException;
 import io.disys.axis.consensus.proto.AppendEntries;
 import io.disys.axis.consensus.proto.AppendEntriesResponse;
 import io.disys.axis.consensus.proto.DataProposal;
@@ -181,7 +182,7 @@ public final class PeerMessageCodec {
                             .setTo(m.to().id())
                             .setFrom(m.from().id())
                             .addAllData(m.data().stream()
-                                    .map(p -> ByteString.copyFrom(((RaftPayload) p).data()))
+                                    .map(p -> ((RaftPayload) p).data())
                                     .toList())
                             .build())
                     .build();
@@ -349,7 +350,13 @@ public final class PeerMessageCodec {
                         new NodeId(m.getTo()),
                         new NodeId(m.getFrom()),
                         m.getDataList().stream()
-                                .map(bs -> new RaftPayload(bs.toByteArray()))
+                                .map(bs -> {
+                                    try {
+                                        return RaftPayload.decode(bs);
+                                    } catch (InvalidProtocolBufferException e) {
+                                        throw new WalDecodeException(e);
+                                    }
+                                })
                                 .toList()
                 );
             }

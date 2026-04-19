@@ -25,6 +25,13 @@
             <version>0.1.0-SNAPSHOT</version>
         </dependency>
 
+        <!-- Command protos -->
+        <dependency>
+            <groupId>io.disys</groupId>
+            <artifactId>command</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- WAL - durable replicated log -->
         <dependency>
             <groupId>io.disys</groupId>
