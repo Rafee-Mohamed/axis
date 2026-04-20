@@ -1,4 +1,4 @@
-package io.disys.axis.mvcc.store;
+package io.disys.axis.mvcc.model;
 
 public record RevisionBound(long min, long max) {
 

@@ -24,13 +24,13 @@ import io.disys.axis.api.proto.RangeRequest;
 import io.disys.axis.api.proto.RangeResponse;
 import io.disys.axis.api.proto.RangeResult;
 import io.disys.axis.mvcc.model.Record;
-import io.disys.axis.mvcc.store.CountOptions;
-import io.disys.axis.mvcc.store.Page;
-import io.disys.axis.mvcc.store.RangeOptions;
+import io.disys.axis.mvcc.model.CountOptions;
+import io.disys.axis.mvcc.model.Page;
+import io.disys.axis.mvcc.model.RangeOptions;
 import io.disys.axis.mvcc.store.Reader;
 import io.disys.axis.mvcc.store.SnapshotResult;
-import io.disys.axis.mvcc.store.SortDirection;
-import io.disys.axis.mvcc.store.SortTarget;
+import io.disys.axis.mvcc.model.SortDirection;
+import io.disys.axis.mvcc.model.SortTarget;
 
 public final class StoreReader {
 

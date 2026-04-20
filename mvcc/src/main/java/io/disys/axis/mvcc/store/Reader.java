@@ -1,6 +1,9 @@
 package io.disys.axis.mvcc.store;
 
 import io.disys.axis.backend.ReadHandle;
+import io.disys.axis.mvcc.model.CountOptions;
+import io.disys.axis.mvcc.model.Page;
+import io.disys.axis.mvcc.model.RangeOptions;
 import io.disys.axis.mvcc.model.Record;
 
 import java.util.Optional;
