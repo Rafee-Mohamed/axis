@@ -42,7 +42,11 @@ service KvService {
 // ===================== Get =====================
 
 message GetRequest  { bytes key = 1; }
-message GetResponse { KeyVal kv = 1; } // absent if key not found
+
+message GetResponse {
+    ResponseHeader header = 1;
+    KeyVal         kv     = 2; // absent if key not found
+}
 
 message GetAtRequest {
     bytes key      = 1;
@@ -50,10 +54,11 @@ message GetAtRequest {
 }
 
 message GetAtResponse {
+    ResponseHeader header = 1;
     oneof result {
-        GetAtOk   ok        = 1;
-        Compacted compacted = 2;
-        Future    future    = 3;
+        GetAtOk   ok        = 2;
+        Compacted compacted = 3;
+        Future    future    = 4;
     }
 }
 
@@ -69,8 +74,9 @@ message RangeRequest {
 }
 
 message RangeResponse {
-    repeated KeyVal kvs       = 1;
-    bool            more = 2;
+    ResponseHeader  header = 1;
+    repeated KeyVal kvs    = 2;
+    bool            more   = 3;
 }
 
 message RangeAtRequest {
@@ -81,15 +87,16 @@ message RangeAtRequest {
 }
 
 message RangeAtResponse {
+    ResponseHeader header = 1;
     oneof result {
-        RangeResult ok        = 1;
-        Compacted   compacted = 2;
-        Future      future    = 3;
+        RangeResult ok        = 2;
+        Compacted   compacted = 3;
+        Future      future    = 4;
     }
 }
 
 message RangeResult {
-    repeated KeyVal kvs       = 1;
+    repeated KeyVal kvs  = 1;
     bool            more = 2;
 }
 
@@ -102,8 +109,9 @@ message KeysRequest {
 }
 
 message KeysResponse {
-    repeated bytes keys      = 1;
-    bool           more = 2;
+    ResponseHeader header = 1;
+    repeated bytes keys   = 2;
+    bool           more   = 3;
 }
 
 message KeysAtRequest {
@@ -114,15 +122,16 @@ message KeysAtRequest {
 }
 
 message KeysAtResponse {
+    ResponseHeader header = 1;
     oneof result {
-        KeysResult ok        = 1;
-        Compacted  compacted = 2;
-        Future     future    = 3;
+        KeysResult ok        = 2;
+        Compacted  compacted = 3;
+        Future     future    = 4;
     }
 }
 
 message KeysResult {
-    repeated bytes keys      = 1;
+    repeated bytes keys = 1;
     bool           more = 2;
 }
 
@@ -134,7 +143,10 @@ message CountRequest {
     CountOptions options = 3;
 }
 
-message CountResponse { int64 count = 1; }
+message CountResponse {
+    ResponseHeader header = 1;
+    int64          count  = 2;
+}
 
 message CountAtRequest {
     bytes        from     = 1;
@@ -144,10 +156,11 @@ message CountAtRequest {
 }
 
 message CountAtResponse {
+    ResponseHeader header = 1;
     oneof result {
-        CountResult ok        = 1;
-        Compacted   compacted = 2;
-        Future      future    = 3;
+        CountResult ok        = 2;
+        Compacted   compacted = 3;
+        Future      future    = 4;
     }
 }
 
@@ -171,12 +184,12 @@ message PutWithLeaseAndGetRequest {
 }
 
 message PutResponse {
-    int64 revision = 1;
+    ResponseHeader header = 1;
 }
 
 message PutAndGetResponse {
-    int64  revision = 1;
-    KeyVal prev_kv  = 2; // absent if key was new
+    ResponseHeader header  = 1;
+    KeyVal         prev_kv = 2; // absent if key was new
 }
 
 // ===================== Partial updates =====================
@@ -193,17 +206,23 @@ message DeleteAndGetRequest  { bytes key  = 1; }
 message DeleteRangeRequest       { bytes from = 1; bytes to = 2; }
 message DeleteRangeAndGetRequest { bytes from = 1; bytes to = 2; }
 
-message DeleteResponse { bool deleted = 1; }
-
-message DeleteAndGetResponse {
-    bool   deleted = 1;
-    KeyVal prev_kv = 2;
+message DeleteResponse {
+    ResponseHeader header  = 1;
+    bool           deleted = 2;
 }
 
-message DeleteRangeResponse { int64 deleted = 1; }
+message DeleteAndGetResponse {
+    ResponseHeader header  = 1;
+    KeyVal         prev_kv = 2; // absent if key did not exist
+}
+
+message DeleteRangeResponse {
+    ResponseHeader header  = 1;
+    int64          deleted = 2;
+}
 
 message DeleteRangeAndGetResponse {
-    int64           deleted  = 1;
+    ResponseHeader  header   = 1;
     repeated KeyVal prev_kvs = 2;
 }
 
@@ -216,15 +235,23 @@ message TxnRequest {
 }
 
 message Condition {
-    bytes key = 1;
-    oneof target {
-        int64 version           = 2;
-        int64 created_revision  = 3;
-        int64 modified_revision = 4;
-        bytes val               = 5;
-        int64 lease_id          = 6;
+    oneof scope {
+        bytes key   = 1;
+        Range range = 2;
     }
-    CompareOp op = 7;
+    oneof target {
+        int64 version           = 3;
+        int64 created_revision  = 4;
+        int64 modified_revision = 5;
+        bytes val               = 6;
+        int64 lease_id          = 7;
+    }
+    CompareOp op = 8;
+}
+
+message Range {
+    bytes from = 1;
+    bytes to   = 2;
 }
 
 enum CompareOp {
@@ -240,36 +267,51 @@ enum CompareOp {
 // The server evaluates reads at the committed revision after the Txn applies.
 message TxnOp {
     oneof op {
+        // reads
         GetRequest            get            = 1;
-        RangeRequest          range          = 2;
-        PutRequest            put            = 3;
-        PutWithLeaseRequest   put_with_lease = 4;
-        DeleteRequest         delete         = 5;
-        DeleteRangeRequest    delete_range   = 6;
-        UpdateLeaseRequest    update_lease   = 7;
-        UpdateValueRequest    update_value   = 8;
-        RemoveLeaseRequest    remove_lease   = 9;
-        TxnRequest            txn            = 10;
+        GetAtRequest          get_at         = 2;
+        RangeRequest          range          = 3;
+        RangeAtRequest        range_at       = 4;
+        KeysRequest           keys           = 5;
+        KeysAtRequest         keys_at        = 6;
+        CountRequest          count          = 7;
+        CountAtRequest        count_at       = 8;
+        // writes
+        PutRequest            put            = 9;
+        PutWithLeaseRequest   put_with_lease = 10;
+        UpdateLeaseRequest    update_lease   = 11;
+        UpdateValueRequest    update_value   = 12;
+        RemoveLeaseRequest    remove_lease   = 13;
+        DeleteRequest         delete         = 14;
+        DeleteRangeRequest    delete_range   = 15;
+        TxnRequest            txn            = 16;
     }
 }
 
 message TxnResponse {
-    bool                 succeeded = 1;
-    repeated TxnOpResult results   = 2;
+    ResponseHeader       header    = 1;
+    bool                 succeeded = 2;
+    repeated TxnOpResult results   = 3;
 }
 
 message TxnOpResult {
     oneof result {
         GetResponse         get          = 1;
-        RangeResponse       range        = 2;
-        PutResponse         put          = 3;
-        DeleteResponse      delete       = 4;
-        DeleteRangeResponse delete_range = 5;
-        TxnResponse         txn          = 6;
+        GetAtResponse       get_at       = 2;
+        RangeResponse       range        = 3;
+        RangeAtResponse     range_at     = 4;
+        KeysResponse        keys         = 5;
+        KeysAtResponse      keys_at      = 6;
+        CountResponse       count        = 7;
+        CountAtResponse     count_at     = 8;
+        PutResponse         put          = 9;
+        DeleteResponse      delete       = 10;
+        DeleteRangeResponse delete_range = 11;
+        TxnResponse         txn          = 12;
     }
 }
 
 // ===================== Compact =====================
 
 message CompactRequest  { int64 revision = 1; }
-message CompactResponse {}
+message CompactResponse { ResponseHeader header = 1; }

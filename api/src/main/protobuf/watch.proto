@@ -61,27 +61,29 @@ message WatchProgressRequest {}
 
 message WatchServerMessage {
     oneof message {
-        WatchCreated  created  = 1;
+        WatchCreated   created   = 1;
         WatchCancelled cancelled = 2;
-        WatchEvents   events   = 3;
-        WatchProgress progress = 4;
+        WatchEvents    events    = 3;
+        WatchProgress  progress  = 4;
     }
 }
 
 // Confirms a watch was created. revision is the revision at which
 // the watch starts - events at or after this revision will be delivered.
 message WatchCreated {
-    int64 watch_id = 1;
-    int64 revision = 2;
+    ResponseHeader header   = 1;
+    int64          watch_id = 2;
+    int64          revision = 3;
 }
 
 // Sent when a watch ends - either client-initiated or server-initiated.
 // compacted_revision is set only when reason = COMPACTED, indicating
 // the earliest revision still available.
 message WatchCancelled {
-    int64        watch_id           = 1;
-    CancelReason reason             = 2;
-    int64        compacted_revision = 3;
+    ResponseHeader header             = 1;
+    int64          watch_id           = 2;
+    CancelReason   reason             = 3;
+    int64          compacted_revision = 4;
 }
 
 enum CancelReason {
@@ -92,14 +94,15 @@ enum CancelReason {
 // One or more events for a specific watch. During catch-up from a past
 // revision, multiple events may be batched together.
 message WatchEvents {
-    int64               watch_id = 1;
-    repeated WatchEvent events   = 2;
+    ResponseHeader      header   = 1;
+    int64               watch_id = 2;
+    repeated WatchEvent events   = 3;
 }
 
 // Server sends this in response to WatchProgressRequest.
-// Guarantees no events have been missed on this stream up to revision.
+// Guarantees no events have been missed on this stream up to header.revision.
 message WatchProgress {
-    int64 revision = 1;
+    ResponseHeader header = 1;
 }
 
 // ===================== Event =====================
