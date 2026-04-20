@@ -5,6 +5,7 @@ import io.disys.axis.consensus.model.RaftPayload;
 import io.disys.axis.consensus.proto.Command;
 import io.disys.axis.consensus.transport.PeerTransport;
 import io.disys.axis.lease.store.LeaseStore;
+import io.disys.axis.mvcc.store.Reader;
 import io.disys.axis.mvcc.store.VersionedStore;
 import io.disys.axis.wal.api.Wal;
 import io.disys.jaft.engine.VolatileState;
@@ -15,13 +16,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 public final class SequentialExecutor {
     private final Node<RaftPayload, Long> node;
     private final Wal wal;
     private final VersionedStore store;
-    private final StoreReader reader;
     private final LeaseStore leaseStore;
     private final PeerTransport transport;
     private final Map<Long, Object> responses;
@@ -43,46 +43,49 @@ public final class SequentialExecutor {
         this.transport = transport;
         this.responses = new ConcurrentHashMap<>();
         this.uid = uid;
-        this.reader = new StoreReader(store);
         this.volatileState = new VolatileState(RoleType.FOLLOWER, Optional.empty());
     }
 
     // ===================== Reads =====================
 
-    private <T> CompletableFuture<T> read(Supplier<T> fn) throws InterruptedException {
-        return node.readIndex().thenApply(_ -> fn.get());
+    private <T> CompletableFuture<T> read(Function<Reader, T> fn) throws InterruptedException {
+        return node.readIndex().thenApply(_ -> {
+            try (var r = store.reader()) {
+                return fn.apply(r);
+            }
+        });
     }
 
     public CompletableFuture<GetResponse> get(GetRequest req) throws InterruptedException {
-        return read(() -> reader.get(req));
+        return read(r -> StoreReader.get(r, req));
     }
 
     public CompletableFuture<GetAtResponse> getAt(GetAtRequest req) throws InterruptedException {
-        return read(() -> reader.getAt(req));
+        return read(r -> StoreReader.getAt(r, req));
     }
 
     public CompletableFuture<RangeResponse> range(RangeRequest req) throws InterruptedException {
-        return read(() -> reader.range(req));
+        return read(r -> StoreReader.range(r, req));
     }
 
     public CompletableFuture<RangeAtResponse> rangeAt(RangeAtRequest req) throws InterruptedException {
-        return read(() -> reader.rangeAt(req));
+        return read(r -> StoreReader.rangeAt(r, req));
     }
 
     public CompletableFuture<KeysResponse> keys(KeysRequest req) throws InterruptedException {
-        return read(() -> reader.keys(req));
+        return read(r -> StoreReader.keys(r, req));
     }
 
     public CompletableFuture<KeysAtResponse> keysAt(KeysAtRequest req) throws InterruptedException {
-        return read(() -> reader.keysAt(req));
+        return read(r -> StoreReader.keysAt(r, req));
     }
 
     public CompletableFuture<CountResponse> count(CountRequest req) throws InterruptedException {
-        return read(() -> reader.count(req));
+        return read(r -> StoreReader.count(r, req));
     }
 
     public CompletableFuture<CountAtResponse> countAt(CountAtRequest req) throws InterruptedException {
-        return read(() -> reader.countAt(req));
+        return read(r -> StoreReader.countAt(r, req));
     }
 
     // ===================== Writes =====================
