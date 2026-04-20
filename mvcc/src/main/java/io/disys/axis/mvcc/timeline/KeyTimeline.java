@@ -89,10 +89,9 @@ public class KeyTimeline {
         var span = deadSpans.get(spanFloor);
         var floor = Query.floorRevision(span.revisions(), commitSeq);
 
-        // if the floor is last and the requested commitSeq is after the last revision commit seq
-        // then the there is no revision at the requested commitSeq it is deleted, if the requested
-        // commitSeq is same last revision then we can return the tombstone revision
-        if (floor == span.revisions().size() - 1 && span.lastRevision().compareTo(commitSeq) < 0) {
+        // if the floor is last then the requested commitSeq is on or after the last revision commit seq
+        // then the there is no revision at the requested commitSeq it is deleted
+        if (floor == span.revisions().size() - 1) {
             return Optional.empty();
         }
 
@@ -125,10 +124,9 @@ public class KeyTimeline {
         var span = deadSpans.get(spanFloor);
         var floor = Query.floorRevision(span.revisions(), commitSeq);
 
-        // if the floor is last and the requested commitSeq is after the last revision commit seq
-        // then the there is no revision at the requested commitSeq it is deleted, if the requested
-        // commitSeq is same last revision then we can return the tombstone revision
-        if (floor == span.revisions().size() - 1 && span.lastRevision().compareTo(commitSeq) < 0) {
+        // if the floor is last then the requested commitSeq is on or after the last revision commit seq
+        // then the there is no revision at the requested commitSeq it is deleted
+        if (floor == span.revisions().size() - 1) {
             return Optional.empty();
         }
 
