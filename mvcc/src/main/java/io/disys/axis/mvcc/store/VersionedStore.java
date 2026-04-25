@@ -8,9 +8,9 @@ import io.disys.axis.mvcc.timeline.*;
 
 import io.disys.axis.backend.Backend;
 import io.disys.axis.backend.Database;
-import io.dsal.persistent.index.core.PersistentBPlusTree;
-import io.dsal.persistent.index.layout.LexigographicPackedByteComparator;
-import io.dsal.persistent.index.layout.PackedByteKeyStorageFactory;
+import io.dsal.versioned.index.persistent.PersistentBPlusTree;
+import io.dsal.versioned.index.persistent.layout.LexigographicPackedByteComparator;
+import io.dsal.versioned.index.persistent.layout.PackedByteKeyStorageFactory;
 
 import java.nio.ByteBuffer;
 import java.util.Set;

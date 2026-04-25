@@ -4,8 +4,8 @@ import io.disys.axis.mvcc.io.*;
 import io.disys.axis.mvcc.model.*;
 
 public interface KeySpan {
-    long createdAtSeq();
-    long modifiedAtSeq();
+    long createdAt();
+    long modifiedAt();
 
     Revision lastRevision();
     Revision firstRevision();

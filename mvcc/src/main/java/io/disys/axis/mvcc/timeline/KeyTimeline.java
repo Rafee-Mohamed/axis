@@ -68,6 +68,142 @@ public class KeyTimeline {
     }
 
 
+    public Optional<RevisionData> getAt(long commitSeq) {
+        if (!liveSpan.isEmpty()) {
+            var floor = Query.floorRevision(liveSpan.revisions(), commitSeq);
+            if (floor >= 0) {
+                return Optional.of(new RevisionData(
+                        liveSpan.get(floor),
+                        liveSpan.createdAt(),
+                        liveSpan.versionAt(floor)
+                ));
+            }
+
+            if (deadSpans.isEmpty()) {
+                return Optional.empty();
+            }
+        }
+
+        var spanFloor = Query.floorDeadSpan(deadSpans, commitSeq);
+
+        if (spanFloor < 0) {
+            return Optional.empty();
+        }
+
+        var span = deadSpans.get(spanFloor);
+        var floor = Query.floorRevision(span.revisions(), commitSeq);
+
+        // if the floor is last then the requested commitSeq is on or after the last revision commit seq
+        // then the there is no revision at the requested commitSeq it is deleted
+        if (floor == span.revisions().size() - 1) {
+            return Optional.empty();
+        }
+
+        return Optional.of(new RevisionData(span.get(floor), span.createdAt(), span.versionAt(floor)));
+    }
+
+    private Optional<RevisionData> getAt(
+            VolatileList<DeadSpan>.PinnedView deadSpans,
+            VolatileList<Revision>.PinnedView liveRevisions,
+            LiveSpan pinnedLiveSpan,
+            long commitSeq
+    ) {
+        if (!liveRevisions.isEmpty()) {
+            var floor = Query.floorRevision(liveRevisions, commitSeq);
+            if (floor >= 0) {
+                return Optional.of(new RevisionData(
+                        liveRevisions.get(floor),
+                        pinnedLiveSpan.createdAt(),
+                        pinnedLiveSpan.versionAt(floor)
+                ));
+            }
+        }
+
+        if (deadSpans.isEmpty()) {
+            return Optional.empty();
+        }
+
+        // position is the upper bound upto which deadspan is allowed to query but in deadspan there might not be any
+        // span at position when deadspan.size == position, which means livespan position is beyond current deadspan size
+        // so deadspan either has to see upto its bound if it is behind position
+        var spanFloor = Query.floorDeadSpan(deadSpans, Math.min(deadSpans.size() - 1, pinnedLiveSpan.position()), commitSeq);
+
+        if (spanFloor < 0) {
+            return Optional.empty();
+        }
+
+        var span = deadSpans.get(spanFloor);
+        var floor = Query.floorRevision(span.revisions(), commitSeq);
+
+        // if the floor is last then the requested commitSeq is on or after the last revision commit seq
+        // then the there is no revision at the requested commitSeq it is deleted
+        if (floor == span.revisions().size() - 1) {
+            return Optional.empty();
+        }
+
+        return Optional.of(new RevisionData(span.get(floor), span.createdAt(), span.versionAt(floor)));
+    }
+
+    public Optional<RevisionData> getPinnedAt(long commitSeq) {
+        /*
+         * The livespan acts as the boundary for pinning, and its position represents the
+         * final point up to which a reader needs to consider data.
+         * The reasoning is based on how timeline reads work - from the reader’s perspective,
+         * the currently observed livespan is the consistent view, and anything beyond that
+         * is not required for correctness.  The reader only needs to consider data up to this point,
+         * even though the timeline may have advanced further.
+         *
+         * This is tied to bound.end() - lastVisibleCommitSeq to reader, which acts as the bound.
+         * The writer advances the commitSeq using a volatile write, and before advancing it,
+         * all index mutations (put/delete operations) are already applied.
+         * On the reader side, the commitSeq is read via a volatile read during livespan creation,
+         * which guarantees that all mutations up to that commit sequence are visible.
+         * There are no guarantees beyond that point, and the reader does not need them either.
+         * So, if a livespan is observed through a volatile read, it is guaranteed to reflect a
+         * state consistent up to that commit sequence - if the key exists at that point.
+         *
+         * Once a livespan is read, its position is final and refers to its index within deadSpans.
+         * At the time of creation, this position effectively corresponds to deadSpans.size.
+         * However, due to concurrency, the reader thread may get paused (for example, due to scheduling or GC),
+         * and in the meantime, the writer may advance the timeline by adding more spans.
+         * As a result, the livespan that was read as live may have already transitioned into a dead span
+         * by the time the reader resumes, and the current deadSpans.size (read via volatile)
+         * may now be greater than the position of that livespan.
+         *
+         * Based on this, the position acts as a stable boundary. If the position of the read livespan
+         * is equal to the current deadSpans.size, it means the livespan is still live,
+         * so for pinning we consider both all dead spans up to the current size and the current livespan.
+         * If the deadSpans.size is greater than the livespan’s position, it means the livespan has already moved to dead,
+         * so we can safely ignore anything beyond that position and only consider dead spans up to upto livespan's position.
+         * i.e. the dead span of live span is included for view
+         *
+         * This ensures that the reader operates within a consistent boundary
+         * even in the presence of concurrent timeline advancement.
+         */
+        // pinning the ref - has to do two ops - pin and position, so pin the ref
+        // first and do the ops as required
+        var currLiveSpan = liveSpan;
+
+        // pin the current view of live span
+        var pinnedLiveSpan = currLiveSpan.pin();
+
+        // -- On this interleaving - the dead spans might have been advanced
+        // i.e. the live span is dead by the time execution reaches this point
+        // so pinnedDeadSpans may contain spans beyond liveSpan position
+        //
+        // pin the current dead spans it is, this pins the current size as well
+        var pinnedDeadSpans = deadSpans.pin();
+
+        if (pinnedLiveSpan.isEmpty() && pinnedDeadSpans.isEmpty()) {
+            throw new IllegalStateException("Inconsistent state: Timeline exists without a single span");
+        }
+
+
+        return getAt(pinnedDeadSpans, pinnedLiveSpan, currLiveSpan, commitSeq);
+    }
+
+
+
     public Optional<Revision> revisionAt(long commitSeq) {
         if (!liveSpan.isEmpty()) {
             var floor = Query.floorRevision(liveSpan.revisions(), commitSeq);

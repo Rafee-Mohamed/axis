@@ -10,43 +10,52 @@ import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 import io.disys.axis.mvcc.model.Record;
-import io.dsal.persistent.index.core.PersistentBPlusTree;
+import io.dsal.versioned.index.api.Direction;
+import io.dsal.versioned.index.api.OrderedVersionedIndex;
+import io.dsal.versioned.index.api.Range;
 
 public class KeyTimelineIndex {
-    private final PersistentBPlusTree<byte[], KeyTimeline> index;
+    private final OrderedVersionedIndex<byte[], KeyTimeline> index;
+    private final TimelineQuery query;
 
-    public KeyTimelineIndex(PersistentBPlusTree<byte[], KeyTimeline> index) {
+    public KeyTimelineIndex(OrderedVersionedIndex<byte[], KeyTimeline> index) {
         this.index = index;
+        this.query = new TimelineQuery();
+    }
+
+    public TimelineTxn txn() {
+        return new TimelineTxn(index.txn(), query);
+    }
+
+    public TimelineView view() {
+        return new TimelineView(index.snapshot(), query);
     }
 
     public Optional<Revision> revision(byte[] key, Function<KeyTimeline, Optional<Revision>> mapper) {
-        return Optional.ofNullable(index.get(key))
-                .flatMap(mapper);
+        return index.get(key).flatMap(mapper);
     }
 
     public <T> Stream<T> range(byte[] from, byte[] to, BiFunction<byte[], KeyTimeline, Optional<T>> mapper) {
-        // right now inclusive range for index but sooner index will be changed to half open bounds
         var stream = StreamSupport.stream(
-                Spliterators.spliteratorUnknownSize(index.rangeIterator(from, to), Spliterator.ORDERED),
+                Spliterators.spliteratorUnknownSize(index.iterator(Direction.ASC, Range.closedOpen(from, to)), Spliterator.ORDERED),
                 false
         );
 
         return stream
-                .map(kv -> mapper.apply(kv.key(), kv.val()))
+                .map(kv -> mapper.apply(kv.key(), kv.value()))
                 .filter(Optional::isPresent)
                 .map(Optional::get);
     }
 
     public Stream<KeyRevision> range(byte[] from, byte[] to, Function<KeyTimeline, Optional<Revision>> mapper) {
-        // right now inclusive range for index but sooner index will be changed to half open bounds
         var stream = StreamSupport.stream(
-                Spliterators.spliteratorUnknownSize(index.rangeIterator(from, to), Spliterator.ORDERED),
+                Spliterators.spliteratorUnknownSize(index.iterator(Direction.ASC, Range.closedOpen(from, to)), Spliterator.ORDERED),
                 false
         );
 
         return stream
                 .map(kv ->
-                        mapper.apply(kv.val())
+                        mapper.apply(kv.value())
                                 .map(r -> new KeyRevision(kv.key(), r)))
                 .filter(Optional::isPresent)
                 .map(Optional::get);
@@ -54,12 +63,12 @@ public class KeyTimelineIndex {
 
     public Stream<Revision> revisions(byte[] from, byte[] to, Function<KeyTimeline, Optional<Revision>> mapper) {
         var stream = StreamSupport.stream(
-                Spliterators.spliteratorUnknownSize(index.rangeIterator(from, to), Spliterator.ORDERED),
+                Spliterators.spliteratorUnknownSize(index.iterator(Direction.ASC, Range.closedOpen(from, to)), Spliterator.ORDERED),
                 false
         );
 
         return stream
-                .map(kv -> mapper.apply(kv.val()))
+                .map(kv -> mapper.apply(kv.value()))
                 .filter(Optional::isPresent)
                 .map(Optional::get);
     }
@@ -94,46 +103,40 @@ public class KeyTimelineIndex {
     }
 
     public void restore(Revision revision, Record record) {
-        var timeline = index.get(record.key());
-
-        if (timeline == null) {
-            timeline = KeyTimeline.restore(revision, record);
-            index.put(record.key(), timeline);
+        var existing = index.get(record.key());
+        if (existing.isEmpty()) {
+            index.put(record.key(), KeyTimeline.restore(revision, record));
         } else if (record.tombstone()) {
-            timeline.tryComplete(revision);
+            existing.get().tryComplete(revision);
         } else {
-            timeline.add(revision);
+            existing.get().add(revision);
         }
     }
 
     public KeySpan add(byte[] key, Revision revision) {
-        var timeline = index.get(key);
-        if (timeline == null) {
-            timeline = KeyTimeline.init(revision);
+        var existing = index.get(key);
+        if (existing.isEmpty()) {
+            var timeline = KeyTimeline.init(revision);
             index.put(key, timeline);
-        } else {
-            timeline.add(revision);
+            return timeline.lastSpan();
         }
+        var timeline = existing.get();
+        timeline.add(revision);
         return timeline.lastSpan();
     }
 
     public Optional<KeySpan> complete(byte[] key, Revision revision) {
-        var timeline = index.get(key);
-        if (timeline != null && timeline.tryComplete(revision)) {
-            return Optional.of(timeline.lastSpan());
-        }
-        return Optional.empty();
+        return index.get(key)
+                .filter(t -> t.tryComplete(revision))
+                .map(KeyTimeline::lastSpan);
     }
 
     public Set<Revision> compact(long commitSeq) {
         var retained = new HashSet<Revision>();
-        // index iterable iterator pins the current root and
-        // walks through that pinned index reading
-        // the snapshot as existed during iterator creation
-        // therefore, index can be mutated concurrently while iterating
-        // while reading from iterator
-        for (var entry: index) {
-            var timeline = entry.val().compact(commitSeq);
+        var it = index.snapshot().iterator(Direction.ASC);
+        while (it.hasNext()) {
+            var entry = it.next();
+            var timeline = entry.value().compact(commitSeq);
 
             if (timeline.isEmpty()) {
                 index.remove(entry.key());
@@ -142,7 +145,7 @@ public class KeyTimelineIndex {
 
             var newTl = timeline.get();
             // if same value then don't need to put
-            if (newTl != entry.val()) {
+            if (newTl != entry.value()) {
                 index.put(entry.key(), newTl);
             }
 

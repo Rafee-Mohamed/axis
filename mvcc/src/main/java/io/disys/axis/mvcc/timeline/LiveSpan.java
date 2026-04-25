@@ -9,21 +9,21 @@ public class LiveSpan implements KeySpan {
     private final VolatileList<Revision> revisions;
     private final int position; 
     private long createdAt; 
-    private int version;
+    private final int startVersion;
     
-    LiveSpan(VolatileList<Revision> revisions, int position, long createdAt, int version) {
+    LiveSpan(VolatileList<Revision> revisions, int position, long createdAt, int startVersion) {
         this.revisions = revisions;
         this.position = position;
         this.createdAt = createdAt;
-        this.version = version;
+        this.startVersion = startVersion;
     }
 
     static LiveSpan init(Revision revision) {
-        return new LiveSpan(VolatileList.of(revision), 0, revision.commitSeq(), 0);
+        return new LiveSpan(VolatileList.of(revision), 0, revision.commitSeq(), 1);
     }
 
-    static LiveSpan restore(Revision revision, long createdAt, int version) {
-        return new LiveSpan(VolatileList.of(revision), 0, createdAt, version);
+    static LiveSpan restore(Revision revision, long createdAt, int startVersion) {
+        return new LiveSpan(VolatileList.of(revision), 0, createdAt, startVersion);
     }
 
     static LiveSpan empty(int position) {
@@ -47,17 +47,16 @@ public class LiveSpan implements KeySpan {
         if (isEmpty()) {
             createdAt = revision.commitSeq();
         }
-        version++;
         revisions.add(revision);
     }
 
     @Override
-    public long createdAtSeq() {
+    public long createdAt() {
         return createdAt;
     }
 
     @Override
-    public long modifiedAtSeq() {
+    public long modifiedAt() {
         return revisions.getLast().commitSeq();
     }
 
@@ -77,8 +76,10 @@ public class LiveSpan implements KeySpan {
 
     @Override
     public int version() {
-        return version;
+        return startVersion + revisions.size() - 1;
     }
+
+    public int versionAt(int idx) { return startVersion + idx; }
 
     Revision get(int idx) {
         return revisions.get(idx);
@@ -87,10 +88,9 @@ public class LiveSpan implements KeySpan {
     int size() { return revisions.size(); }
 
     DeadSpan complete(Revision deleteRevision) {
-        version++;
         var nextDeadSpan = revisions.toList();
         nextDeadSpan.add(deleteRevision);
-        return DeadSpan.create(nextDeadSpan, createdAt, version);
+        return DeadSpan.create(nextDeadSpan, createdAt, startVersion);
     }
 
 
@@ -103,11 +103,11 @@ public class LiveSpan implements KeySpan {
 
         // if all commitSeq is greater than commitSeq, all of them are queryable
         if (floor < 0) {
-            return new LiveSpan(revisions, position, createdAt, version);
+            return new LiveSpan(revisions, position, createdAt, startVersion);
         }
 
         var compacted = revisions.copy(floor);
 
-        return new LiveSpan(compacted, position, createdAt, version);
+        return new LiveSpan(compacted, position, createdAt, startVersion + floor);
     }
 }
