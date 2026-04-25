@@ -13,10 +13,10 @@ import io.dsal.versioned.index.persistent.layout.LexigographicPackedByteComparat
 import io.dsal.versioned.index.persistent.layout.PackedByteKeyStorageFactory;
 
 import java.nio.ByteBuffer;
-import java.util.Set;
 
 public class VersionedStore {
     private final KeyTimelineIndex index;
+    private final TimelineQuery query;
     private final Backend backend;
     private volatile RevisionRecordBuffer buffer;
     private final CommitSeqBound bound;
@@ -45,6 +45,7 @@ public class VersionedStore {
             CommitSeqBound bound,
             Db db,
             KeyTimelineIndex index,
+            TimelineQuery query,
             RevisionRecordBuffer buffer,
             WriteSession session,
             BatchCompactor compactor,
@@ -54,6 +55,7 @@ public class VersionedStore {
         this.backend = backend;
         this.config = config;
         this.index = index;
+        this.query = query;
         this.buffer = buffer;
         this.session = session;
         this.compactor = compactor;
@@ -100,9 +102,10 @@ public class VersionedStore {
 
         txn.close();
 
-        var session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder, compactor);
+        var query = new TimelineQuery();
+        var session = new WriteSession(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
 
-        return new VersionedStore(backend, config, bound, db, index, buffer, session, compactor, encoder, decoder);
+        return new VersionedStore(backend, config, bound, db, index, query, buffer, session, compactor, encoder, decoder);
     }
 
     private static Db getDb(VersionedStoreConfig config) {
@@ -198,7 +201,9 @@ public class VersionedStore {
         // should be returned with compacted via published compact commitSeq in backend.
         // The index is concurrently mutated by CoW therefore all readers must view the
         // consistent state of index at any given point
-        var retained = index.compact(commitSeq);
+        var tlTxn = index.txn();
+        var retained = tlTxn.compact(commitSeq);
+        tlTxn.commit();
 
         // ----- On creating new Reader, during this interleaving
         // all the readers will see a consistent buffer, index and firstVisibleCommitSeq
@@ -211,13 +216,13 @@ public class VersionedStore {
         // from now on new writes on in this session with new buffer and new index
         var txn = backend.beginWrite();
         compactor = BatchCompactor.create(txn, db, config.deleteBatchSize(), retained, decoder);
-        session = new WriteSession(config, db, txn, index, buffer, bound, encoder, decoder, compactor);
+        session = new WriteSession(config, db, txn, index.txn(), query, buffer, bound, encoder, decoder, compactor);
     }
 
     public void sync() {
         session.commit();
         renewBuffer();
-        session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder, compactor);
+        session = new WriteSession(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
     }
 
     public Writer writer() {
@@ -234,7 +239,7 @@ public class VersionedStore {
             // records can be present in backend but can hold old buffer
             // so two views of same data, while reading keep this in mind
             renewBuffer();
-            session = new WriteSession(config, db, backend.beginWrite(), index, buffer, bound, encoder, decoder, compactor);
+            session = new WriteSession(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
         }
         return session;
     }

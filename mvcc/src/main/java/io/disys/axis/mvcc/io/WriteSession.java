@@ -11,16 +11,14 @@ import io.disys.axis.mvcc.timeline.*;
 import io.disys.axis.backend.WriteTxn;
 
 import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.Comparator;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
-import java.util.stream.Stream;
 
 public class WriteSession implements Writer {
     private final WriteTxn txn;
-    private final KeyTimelineIndex index;
+    private final TimelineTxn tlTxn;
+    private final TimelineQuery query;
     private final RevisionRecordBuffer buffer;
     private final CommitSeqBound bound;
     private final VersionedStoreConfig config;
@@ -35,7 +33,8 @@ public class WriteSession implements Writer {
             VersionedStoreConfig config,
             VersionedStore.Db db,
             WriteTxn txn,
-            KeyTimelineIndex index,
+            TimelineTxn tlTxn,
+            TimelineQuery query,
             RevisionRecordBuffer buffer,
             CommitSeqBound bound,
             RecordEncoder encoder,
@@ -44,7 +43,8 @@ public class WriteSession implements Writer {
     ) {
         this.config = config;
         this.txn = txn;
-        this.index = index;
+        this.tlTxn = tlTxn;
+        this.query = query;
         this.buffer = buffer;
         this.bound = bound;
         this.encoder = encoder;
@@ -109,7 +109,7 @@ public class WriteSession implements Writer {
     @Override
     public void put(byte[] key, byte[] val) {
         var revision = Revision.modify(bound.next(), ordinal++);
-        var span = index.add(key, revision);
+        var span = tlTxn.add(key, revision);
 
         var record = new Record(key, val, span);
         buffer.stage(new RevisionRecord(revision, record));
@@ -119,7 +119,7 @@ public class WriteSession implements Writer {
     @Override
     public boolean delete(byte[] key) {
         var revision = Revision.modify(bound.next(), ordinal++);
-        var span = index.complete(key, revision);
+        var span = tlTxn.complete(key, revision);
 
         if (span.isEmpty()) {
             return false;
@@ -146,7 +146,7 @@ public class WriteSession implements Writer {
             }
         };
 
-        index.range(from, to, mapper)
+        tlTxn.range(from, to, mapper)
                 .forEach(rr -> {
                     buffer.stage(rr);
                     txn.put(db.revision(), encoder.encode(rr.revision()), encoder.encode(rr.record()));
@@ -162,15 +162,18 @@ public class WriteSession implements Writer {
         return txn;
     }
 
-    Record get(byte[] key, Revision revision) {
-        return buffer.get(revision)
+    Record get(byte[] key, RevisionData data) {
+        return buffer.get(data.revision())
                 .map(RevisionRecord::record)
-                .or(() -> txn.get(db.revision(), encoder.encode(revision))
+                .or(() -> txn.get(db.revision(), encoder.encode(data.revision()))
                         .map(decoder::decodeRecord))
                 .orElseThrow(() ->
-                        new InconsistentStoreException.MissingRecordForRevision(key, revision, bound.start(), bound.end()));
+                        new InconsistentStoreException.MissingRecordForRevision(key, data.revision(), bound.start(), bound.end()));
     }
 
+    Record get(KeyRevisionData krd) {
+        return get(krd.key(), krd.data());
+    }
     private <T> SnapshotResult<T> snapshotResultOutsideWindow(long commitSeq) {
         if (compacted(commitSeq)) {
             return new SnapshotResult.Compacted<>(bound.start(), commitSeq);
@@ -183,76 +186,18 @@ public class WriteSession implements Writer {
         return null;
     }
 
-    // ===================== Private helpers =====================
-
-    private Page<Record> pageRecords(Stream<KeyRevision> stream, RangeOptions options) {
-        if (options.hasModifiedFilter()) {
-            stream = stream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
-        }
-        Stream<Record> records = stream.map(kr -> get(kr.key(), kr.revision()));
-        if (options.hasCreatedFilter()) {
-            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
-        }
-        if (options.hasVersionFilter()) {
-            records = records.filter(r -> options.versionIn().test(r.version()));
-        }
-        if (!options.isKeySort()) {
-            records = records.sorted(recordComparator(options));
-        }
-        return page(records, options.limit());
-    }
-
-    private Page<byte[]> pageKeys(Stream<KeyRevision> stream, RangeOptions options) {
-        if (options.hasModifiedFilter()) {
-            stream = stream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
-        }
-        // KEY sort without createdIn and without versionIn: never need to load records
-        if (options.isKeySort() && !options.hasCreatedFilter() && !options.hasVersionFilter()) {
-            return page(stream.map(KeyRevision::key), options.limit());
-        }
-        Stream<Record> records = stream.map(kr -> get(kr.key(), kr.revision()));
-        if (options.hasCreatedFilter()) {
-            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
-        }
-        if (options.hasVersionFilter()) {
-            records = records.filter(r -> options.versionIn().test(r.version()));
-        }
-        if (!options.isKeySort()) {
-            records = records.sorted(recordComparator(options));
-        }
-        return page(records.map(Record::key), options.limit());
-    }
-
-    private <T> Page<T> page(Stream<T> stream, long limit) {
-        if (limit == RangeOptions.UNLIMITED) {
-            return new Page<>(stream.toList(), false);
-        }
-        var items = stream.limit(limit + 1).toList();
-        boolean more = items.size() > limit;
-        return new Page<>(more ? items.subList(0, (int) limit) : items, more);
-    }
-
-    private static Comparator<Record> recordComparator(RangeOptions options) {
-        Comparator<Record> base = switch (options.sortTarget()) {
-            case KEY -> Comparator.comparing(Record::key, Arrays::compare);
-            case VERSION -> Comparator.comparingInt(Record::version);
-            case CREATED_REVISION -> Comparator.comparingLong(Record::createdAtSeq);
-            case MODIFIED_REVISION -> Comparator.comparingLong(Record::modifiedAtSeq);
-            case VAL -> Comparator.comparing(Record::val, Arrays::compare);
-        };
-        return options.sortDirection() == SortDirection.DESCENDING ? base.reversed() : base;
-    }
 
     @Override
     public Optional<Record> get(byte[] key) {
-        return index.revisionAt(key, bound.next()).map(r -> get(key, r));
+        return tlTxn.getAt(key, bound.next()).map(r -> get(key, r));
     }
+
 
     @Override
     public SnapshotResult<Optional<Record>> getAt(byte[] key, long commitSeq) {
         var result = this.<Optional<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                index.revisionAt(key, commitSeq).map(r -> get(key, r))
+                tlTxn.getAt(key, commitSeq).map(r -> get(key, r))
         );
     }
 
@@ -260,15 +205,16 @@ public class WriteSession implements Writer {
 
     @Override
     public Page<Record> range(byte[] from, byte[] to) {
-        var items = index.rangeAt(from, to, bound.next())
-                .map(kr -> get(kr.key(), kr.revision()))
-                .toList();
-        return new Page<>(items, false);
+        return query.page(tlTxn.rangeAt(from, to, bound.next()), this::get);
     }
 
     @Override
     public Page<Record> range(byte[] from, byte[] to, RangeOptions options) {
-        return pageRecords(index.rangeAt(from, to, bound.next()), options);
+        return query.page(
+                tlTxn.rangeAt(from, to, bound.next(), options.sortDirection()),
+                this::get,
+                options
+        );
     }
 
     // ===================== rangeAt =====================
@@ -277,9 +223,7 @@ public class WriteSession implements Writer {
     public SnapshotResult<Page<Record>> rangeAt(byte[] from, byte[] to, long commitSeq) {
         var result = this.<Page<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                new Page<>(index.rangeAt(from, to, commitSeq)
-                        .map(kr -> get(kr.key(), kr.revision()))
-                        .toList(), false)
+                query.page(tlTxn.rangeAt(from, to, commitSeq), this::get)
         );
     }
 
@@ -287,7 +231,11 @@ public class WriteSession implements Writer {
     public SnapshotResult<Page<Record>> rangeAt(byte[] from, byte[] to, long commitSeq, RangeOptions options) {
         var result = this.<Page<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                pageRecords(index.rangeAt(from, to, commitSeq), options)
+                query.page(
+                        tlTxn.rangeAt(from, to, commitSeq, options.sortDirection()),
+                        this::get,
+                        options
+                )
         );
     }
 
@@ -295,15 +243,12 @@ public class WriteSession implements Writer {
 
     @Override
     public Page<byte[]> keys(byte[] from, byte[] to) {
-        var items = index.rangeAt(from, to, bound.next())
-                .map(KeyRevision::key)
-                .toList();
-        return new Page<>(items, false);
+        return query.pageKeys(tlTxn.rangeAt(from, to, bound.next()));
     }
 
     @Override
     public Page<byte[]> keys(byte[] from, byte[] to, RangeOptions options) {
-        return pageKeys(index.rangeAt(from, to, bound.next()), options);
+        return query.pageKeys(tlTxn.rangeAt(from, to, bound.next()), this::get, options);
     }
 
     // ===================== keysAt =====================
@@ -312,9 +257,7 @@ public class WriteSession implements Writer {
     public SnapshotResult<Page<byte[]>> keysAt(byte[] from, byte[] to, long commitSeq) {
         var result = this.<Page<byte[]>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                new Page<>(index.rangeAt(from, to, commitSeq)
-                        .map(KeyRevision::key)
-                        .toList(), false)
+                query.pageKeys(tlTxn.rangeAt(from, to, commitSeq))
         );
     }
 
@@ -322,7 +265,7 @@ public class WriteSession implements Writer {
     public SnapshotResult<Page<byte[]>> keysAt(byte[] from, byte[] to, long commitSeq, RangeOptions options) {
         var result = this.<Page<byte[]>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                pageKeys(index.rangeAt(from, to, commitSeq), options)
+                query.pageKeys(tlTxn.rangeAt(from, to, commitSeq), this::get, options)
         );
     }
 
@@ -330,30 +273,12 @@ public class WriteSession implements Writer {
 
     @Override
     public long count(byte[] from, byte[] to) {
-        return index.countAt(from, to, bound.next()).count();
+        return tlTxn.rangeAt(from, to, bound.next()).count();
     }
 
     @Override
     public long count(byte[] from, byte[] to, CountOptions options) {
-        if (!options.hasCreatedFilter() && !options.hasVersionFilter()) {
-            var stream = index.countAt(from, to, bound.next());
-            if (options.hasModifiedFilter()) {
-                stream = stream.filter(r -> options.modifiedIn().test(r.commitSeq()));
-            }
-            return stream.count();
-        }
-        Stream<KeyRevision> krStream = index.rangeAt(from, to, bound.next());
-        if (options.hasModifiedFilter()) {
-            krStream = krStream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
-        }
-        Stream<Record> records = krStream.map(kr -> get(kr.key(), kr.revision()));
-        if (options.hasCreatedFilter()) {
-            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
-        }
-        if (options.hasVersionFilter()) {
-            records = records.filter(r -> options.versionIn().test(r.version()));
-        }
-        return records.count();
+        return query.count(tlTxn.rangeAt(from, to, bound.next()), options);
     }
 
     // ===================== countAt =====================
@@ -362,33 +287,15 @@ public class WriteSession implements Writer {
     public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq) {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                index.countAt(from, to, commitSeq).count()
+                tlTxn.rangeAt(from, to, commitSeq).count()
         );
     }
 
     @Override
     public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, CountOptions options) {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
-        if (result != null) return result;
-
-        if (!options.hasCreatedFilter() && !options.hasVersionFilter()) {
-            var stream = index.countAt(from, to, commitSeq);
-            if (options.hasModifiedFilter()) {
-                stream = stream.filter(r -> options.modifiedIn().test(r.commitSeq()));
-            }
-            return new SnapshotResult.Ok<>(stream.count());
-        }
-        Stream<KeyRevision> krStream = index.rangeAt(from, to, commitSeq);
-        if (options.hasModifiedFilter()) {
-            krStream = krStream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
-        }
-        Stream<Record> records = krStream.map(kr -> get(kr.key(), kr.revision()));
-        if (options.hasCreatedFilter()) {
-            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
-        }
-        if (options.hasVersionFilter()) {
-            records = records.filter(r -> options.versionIn().test(r.version()));
-        }
-        return new SnapshotResult.Ok<>(records.count());
+        return result != null ? result : new SnapshotResult.Ok<>(
+                query.count(tlTxn.rangeAt(from, to, commitSeq), options)
+        );
     }
 }
