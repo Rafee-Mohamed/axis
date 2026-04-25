@@ -11,14 +11,12 @@ import io.disys.axis.mvcc.timeline.*;
 import io.disys.axis.backend.ReadTxn;
 
 import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.Comparator;
 import java.util.Optional;
-import java.util.stream.Stream;
 
 public class CommitBoundedReader implements Reader {
 
-    private final KeyTimelineIndex index;
+    private final TimelineView view;
+    private final TimelineQuery query;
     private final ReadTxn txn;
     // the buffer view is an immutable view into the actual buffer
     // the buffer should be within the bounds of firstCommitSeq and lastCommitSeq
@@ -45,7 +43,8 @@ public class CommitBoundedReader implements Reader {
 
     private CommitBoundedReader(
             VersionedStore.Db db,
-            KeyTimelineIndex index,
+            TimelineView view,
+            TimelineQuery query,
             ReadTxn txn,
             RevisionRecordBuffer.View buffer,
             RecordEncoder encoder,
@@ -54,7 +53,8 @@ public class CommitBoundedReader implements Reader {
             long lastCommitSeq
     ) {
         this.db = db;
-        this.index = index;
+        this.view = view;
+        this.query = query;
         this.txn = txn;
         this.buffer = buffer;
         this.encoder = encoder;
@@ -71,7 +71,8 @@ public class CommitBoundedReader implements Reader {
 
     public static CommitBoundedReader create(
             VersionedStore.Db db,
-            KeyTimelineIndex index,
+            TimelineView view,
+            TimelineQuery query,
             ReadTxn txn,
             RevisionRecordBuffer buffer,
             RecordEncoder encoder,
@@ -82,7 +83,8 @@ public class CommitBoundedReader implements Reader {
         var lastCommitSeq = bound.end();
         return new CommitBoundedReader(
                 db,
-                index,
+                view,
+                query,
                 txn,
                 buffer.view(lastCommitSeq),
                 encoder,
@@ -100,13 +102,17 @@ public class CommitBoundedReader implements Reader {
         return commitSeq > lastCommitSeq;
     }
 
-    Record get(byte[] key, Revision revision) {
-        return buffer.get(revision)
+    Record get(byte[] key, RevisionData data) {
+        return buffer.get(data.revision())
                 .map(RevisionRecord::record)
-                .or(() -> txn.get(db.revision(), encoder.encode(revision))
+                .or(() -> txn.get(db.revision(), encoder.encode(data.revision()))
                         .map(decoder::decodeRecord))
                 .orElseThrow(() ->
-                        new InconsistentStoreException.MissingRecordForRevision(key, revision, firstCommitSeq, lastCommitSeq));
+                        new InconsistentStoreException.MissingRecordForRevision(key, data.revision(), firstCommitSeq, lastCommitSeq));
+    }
+
+    Record get(KeyRevisionData krd) {
+        return get(krd.key(), krd.data());
     }
 
     private <T> SnapshotResult<T> snapshotResultOutsideWindow(long commitSeq) {
@@ -125,92 +131,31 @@ public class CommitBoundedReader implements Reader {
 
     @Override
     public Optional<Record> get(byte[] key) {
-        return index.pinnedRevisionAt(key, lastCommitSeq)
-                .map(r -> get(key, r));
+        return view.getAt(key, lastCommitSeq).map(rd -> get(key, rd));
     }
 
     @Override
     public SnapshotResult<Optional<Record>> getAt(byte[] key, long commitSeq) {
         var result = this.<Optional<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                index.pinnedRevisionAt(key, commitSeq)
-                        .map(r -> get(key, r))
+                view.getAt(key, commitSeq).map(rd -> get(key, rd))
         );
-    }
-
-    // ===================== Private helpers =====================
-
-    private Page<Record> pageRecords(Stream<KeyRevision> stream, RangeOptions options) {
-        if (options.hasModifiedFilter()) {
-            stream = stream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
-        }
-        Stream<Record> records = stream.map(kr -> get(kr.key(), kr.revision()));
-        if (options.hasCreatedFilter()) {
-            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
-        }
-        if (options.hasVersionFilter()) {
-            records = records.filter(r -> options.versionIn().test(r.version()));
-        }
-        if (!options.isKeySort()) {
-            records = records.sorted(recordComparator(options));
-        }
-        return page(records, options.limit());
-    }
-
-    private Page<byte[]> pageKeys(Stream<KeyRevision> stream, RangeOptions options) {
-        if (options.hasModifiedFilter()) {
-            stream = stream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
-        }
-        // KEY sort without createdIn and without versionIn: never need to load records
-        if (options.isKeySort() && !options.hasCreatedFilter() && !options.hasVersionFilter()) {
-            return page(stream.map(KeyRevision::key), options.limit());
-        }
-        Stream<Record> records = stream.map(kr -> get(kr.key(), kr.revision()));
-        if (options.hasCreatedFilter()) {
-            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
-        }
-        if (options.hasVersionFilter()) {
-            records = records.filter(r -> options.versionIn().test(r.version()));
-        }
-        if (!options.isKeySort()) {
-            records = records.sorted(recordComparator(options));
-        }
-        return page(records.map(Record::key), options.limit());
-    }
-
-    private <T> Page<T> page(Stream<T> stream, long limit) {
-        if (limit == RangeOptions.UNLIMITED) {
-            return new Page<>(stream.toList(), false);
-        }
-        var items = stream.limit(limit + 1).toList();
-        boolean more = items.size() > limit;
-        return new Page<>(more ? items.subList(0, (int) limit) : items, more);
-    }
-
-    private static Comparator<Record> recordComparator(RangeOptions options) {
-        Comparator<Record> base = switch (options.sortTarget()) {
-            case KEY               -> Comparator.comparing(Record::key, Arrays::compare);
-            case VERSION           -> Comparator.comparingInt(Record::version);
-            case CREATED_REVISION  -> Comparator.comparingLong(Record::createdAtSeq);
-            case MODIFIED_REVISION -> Comparator.comparingLong(Record::modifiedAtSeq);
-            case VAL               -> Comparator.comparing(Record::val, Arrays::compare);
-        };
-        return options.sortDirection() == SortDirection.DESCENDING ? base.reversed() : base;
     }
 
     // ===================== range =====================
 
     @Override
     public Page<Record> range(byte[] from, byte[] to) {
-        var items = index.pinnedRangeAt(from, to, lastCommitSeq)
-                .map(kr -> get(kr.key(), kr.revision()))
-                .toList();
-        return new Page<>(items, false);
+        return query.page(view.rangeAt(from, to, lastCommitSeq), this::get);
     }
 
     @Override
     public Page<Record> range(byte[] from, byte[] to, RangeOptions options) {
-        return pageRecords(index.pinnedRangeAt(from, to, lastCommitSeq), options);
+        return query.page(
+                view.rangeAt(from, to, lastCommitSeq, options.sortDirection()),
+                this::get,
+                options
+        );
     }
 
     // ===================== rangeAt =====================
@@ -219,9 +164,7 @@ public class CommitBoundedReader implements Reader {
     public SnapshotResult<Page<Record>> rangeAt(byte[] from, byte[] to, long commitSeq) {
         var result = this.<Page<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                new Page<>(index.pinnedRangeAt(from, to, commitSeq)
-                        .map(kr -> get(kr.key(), kr.revision()))
-                        .toList(), false)
+                query.page(view.rangeAt(from, to, commitSeq), this::get)
         );
     }
 
@@ -229,7 +172,11 @@ public class CommitBoundedReader implements Reader {
     public SnapshotResult<Page<Record>> rangeAt(byte[] from, byte[] to, long commitSeq, RangeOptions options) {
         var result = this.<Page<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                pageRecords(index.pinnedRangeAt(from, to, commitSeq), options)
+                query.page(
+                        view.rangeAt(from, to, commitSeq, options.sortDirection()),
+                        this::get,
+                        options
+                )
         );
     }
 
@@ -237,15 +184,12 @@ public class CommitBoundedReader implements Reader {
 
     @Override
     public Page<byte[]> keys(byte[] from, byte[] to) {
-        var items = index.pinnedRangeAt(from, to, lastCommitSeq)
-                .map(KeyRevision::key)
-                .toList();
-        return new Page<>(items, false);
+        return query.pageKeys(view.rangeAt(from, to, lastCommitSeq));
     }
 
     @Override
     public Page<byte[]> keys(byte[] from, byte[] to, RangeOptions options) {
-        return pageKeys(index.pinnedRangeAt(from, to, lastCommitSeq), options);
+        return query.pageKeys(view.rangeAt(from, to, lastCommitSeq), this::get, options);
     }
 
     // ===================== keysAt =====================
@@ -254,9 +198,7 @@ public class CommitBoundedReader implements Reader {
     public SnapshotResult<Page<byte[]>> keysAt(byte[] from, byte[] to, long commitSeq) {
         var result = this.<Page<byte[]>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                new Page<>(index.pinnedRangeAt(from, to, commitSeq)
-                        .map(KeyRevision::key)
-                        .toList(), false)
+                query.pageKeys(view.rangeAt(from, to, commitSeq))
         );
     }
 
@@ -264,7 +206,7 @@ public class CommitBoundedReader implements Reader {
     public SnapshotResult<Page<byte[]>> keysAt(byte[] from, byte[] to, long commitSeq, RangeOptions options) {
         var result = this.<Page<byte[]>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                pageKeys(index.pinnedRangeAt(from, to, commitSeq), options)
+                query.pageKeys(view.rangeAt(from, to, commitSeq), this::get, options)
         );
     }
 
@@ -272,30 +214,12 @@ public class CommitBoundedReader implements Reader {
 
     @Override
     public long count(byte[] from, byte[] to) {
-        return index.pinnedCountAt(from, to, lastCommitSeq).count();
+        return view.rangeAt(from, to, lastCommitSeq).count();
     }
 
     @Override
     public long count(byte[] from, byte[] to, CountOptions options) {
-        if (!options.hasCreatedFilter() && !options.hasVersionFilter()) {
-            var stream = index.pinnedCountAt(from, to, lastCommitSeq);
-            if (options.hasModifiedFilter()) {
-                stream = stream.filter(r -> options.modifiedIn().test(r.commitSeq()));
-            }
-            return stream.count();
-        }
-        Stream<KeyRevision> krStream = index.pinnedRangeAt(from, to, lastCommitSeq);
-        if (options.hasModifiedFilter()) {
-            krStream = krStream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
-        }
-        Stream<Record> records = krStream.map(kr -> get(kr.key(), kr.revision()));
-        if (options.hasCreatedFilter()) {
-            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
-        }
-        if (options.hasVersionFilter()) {
-            records = records.filter(r -> options.versionIn().test(r.version()));
-        }
-        return records.count();
+        return query.count(view.rangeAt(from, to, lastCommitSeq), options);
     }
 
     // ===================== countAt =====================
@@ -304,7 +228,7 @@ public class CommitBoundedReader implements Reader {
     public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq) {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                index.pinnedCountAt(from, to, commitSeq).count()
+                view.rangeAt(from, to, commitSeq).count()
         );
     }
 
@@ -312,26 +236,7 @@ public class CommitBoundedReader implements Reader {
     public SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, CountOptions options) {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
         if (result != null) return result;
-
-        if (!options.hasCreatedFilter() && !options.hasVersionFilter()) {
-            var stream = index.pinnedCountAt(from, to, commitSeq);
-            if (options.hasModifiedFilter()) {
-                stream = stream.filter(r -> options.modifiedIn().test(r.commitSeq()));
-            }
-            return new SnapshotResult.Ok<>(stream.count());
-        }
-        Stream<KeyRevision> krStream = index.pinnedRangeAt(from, to, commitSeq);
-        if (options.hasModifiedFilter()) {
-            krStream = krStream.filter(kr -> options.modifiedIn().test(kr.revision().commitSeq()));
-        }
-        Stream<Record> records = krStream.map(kr -> get(kr.key(), kr.revision()));
-        if (options.hasCreatedFilter()) {
-            records = records.filter(r -> options.createdIn().test(r.createdAtSeq()));
-        }
-        if (options.hasVersionFilter()) {
-            records = records.filter(r -> options.versionIn().test(r.version()));
-        }
-        return new SnapshotResult.Ok<>(records.count());
+        return new SnapshotResult.Ok<>(query.count(view.rangeAt(from, to, commitSeq), options));
     }
 
     // ===================== handle / close =====================

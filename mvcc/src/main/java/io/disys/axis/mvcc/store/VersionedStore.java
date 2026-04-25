@@ -138,7 +138,7 @@ public class VersionedStore {
 
     // multiple readers allowed, can called by multiple threads to get readers
     public Reader reader() {
-        return CommitBoundedReader.create(db, index, backend.beginRead(), buffer, encoder, decoder, bound);
+        return CommitBoundedReader.create(db, index.view(), query, backend.beginRead(), buffer, encoder, decoder, bound);
     }
 
     public void renewBuffer() {
