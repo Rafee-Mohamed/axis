@@ -22,4 +22,8 @@ public class TimelineView {
     public Stream<KeyRevisionData> rangeAt(byte[] from, byte[] to, long commitSeq, SortDirection direction) {
         return query.range(snapshot, from, to, direction, tl -> tl.getPinnedAt(commitSeq));
     }
+
+    public Stream<KeyRevisionData> rangeAt(byte[] from, byte[] to, long commitSeq) {
+        return query.range(snapshot, from, to, SortDirection.ASCENDING, tl -> tl.getPinnedAt(commitSeq));
+    }
 }

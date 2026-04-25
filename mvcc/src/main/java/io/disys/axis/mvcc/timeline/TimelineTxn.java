@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.stream.Stream;
 
 public class TimelineTxn {
@@ -27,6 +28,14 @@ public class TimelineTxn {
 
     public Stream<KeyRevisionData> rangeAt(byte[] from, byte[] to, long commitSeq, SortDirection direction) {
         return query.range(txn, from, to, direction,  tl -> tl.getAt(commitSeq));
+    }
+
+    public Stream<KeyRevisionData> rangeAt(byte[] from, byte[] to, long commitSeq) {
+        return query.range(txn, from, to, SortDirection.ASCENDING,  tl -> tl.getAt(commitSeq));
+    }
+
+    public <T> Stream<T> range(byte[] from, byte[] to, BiFunction<byte[], KeyTimeline, Optional<T>> mapper) {
+        return query.range(txn, from, to, SortDirection.ASCENDING, mapper);
     }
 
     public void restore(Revision revision, Record record) {
