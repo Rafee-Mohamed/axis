@@ -156,13 +156,17 @@ public class VersionedStore {
     // Behaviour of concurrent threads accessing these are undefined
     // compact removes all revisions existed before given commitSeq
     // that are not present as the point in time view of commitSeq
-    public void compact(long commitSeq) {
+    public CompactResult compact(long commitSeq) {
         if (!compactor.done()) {
-            return;
+            return new CompactResult.InProgress();
         }
 
         if (bound.start() >= commitSeq) {
-            return;
+            return new CompactResult.AlreadyCompacted(bound.start(), commitSeq);
+        }
+
+        if (bound.end() < commitSeq) {
+            return new CompactResult.FutureRevision(bound.start(), commitSeq);
         }
         // add the compaction point
         session.compact(commitSeq);
@@ -223,6 +227,8 @@ public class VersionedStore {
         var txn = backend.beginWrite();
         compactor = BatchCompactor.create(txn, db, config.deleteBatchSize(), retained, decoder);
         session = new WriteSession(config, db, txn, index.txn(), query, buffer, bound, encoder, decoder, compactor);
+
+        return new CompactResult.Ok();
     }
 
     public void sync() {
