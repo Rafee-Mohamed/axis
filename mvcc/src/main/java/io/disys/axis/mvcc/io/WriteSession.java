@@ -110,7 +110,7 @@ public class WriteSession implements Writer {
 
     @Override
     public void put(byte[] key, byte[] val) {
-        var revision = Revision.modify(bound.next(), ordinal++);
+        var revision = new Revision (bound.next(), ordinal++);
         var span = tlTxn.add(key, revision);
 
         var record = new Record(key, val, span);
@@ -127,7 +127,7 @@ public class WriteSession implements Writer {
 
     @Override
     public boolean delete(byte[] key) {
-        var revision = Revision.modify(bound.next(), ordinal++);
+        var revision = new Revision (bound.next(), ordinal++);
         var span = tlTxn.complete(key, revision);
 
         if (span.isEmpty()) {
