@@ -16,7 +16,7 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 
-public class WriteSession implements Writer {
+public class SessionWriter implements Writer {
     private final WriteTxn txn;
     private final TimelineTxn tlTxn;
     private final TimelineQuery query;
@@ -30,7 +30,7 @@ public class WriteSession implements Writer {
     private int ordinal;
     private final BatchCompactor compactor;
 
-    public WriteSession(
+    public SessionWriter(
             VersionedStoreConfig config,
             VersionedStore.Db db,
             WriteTxn txn,
@@ -219,7 +219,7 @@ public class WriteSession implements Writer {
                 .or(() -> txn.get(db.revision(), encoder.encode(data.revision()))
                         .map(decoder::decodeRecord))
                 .orElseThrow(() ->
-                        new IllegalStateException("WriteSession: Record missing for timeline-selected revision: revision=%s, revision bounds=[%d..%d], ordinal=%d"
+                        new IllegalStateException("SessionWriter: Record missing for timeline-selected revision: revision=%s, revision bounds=[%d..%d], ordinal=%d"
                                 .formatted(data.revision(), bound.start(), bound.end(), ordinal)));
     }
 

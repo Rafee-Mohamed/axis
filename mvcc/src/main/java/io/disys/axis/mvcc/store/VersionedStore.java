@@ -24,7 +24,7 @@ public class VersionedStore {
     private final RecordEncoder encoder;
     private final RecordDecoder decoder;
     private final Db db;
-    private WriteSession session;
+    private SessionWriter session;
     private BatchCompactor compactor;
 
     public record Db(Database revision, MetaDb meta) {
@@ -47,7 +47,7 @@ public class VersionedStore {
             KeyTimelineIndex index,
             TimelineQuery query,
             RevisionRecordBuffer buffer,
-            WriteSession session,
+            SessionWriter session,
             BatchCompactor compactor,
             RecordEncoder encoder,
             RecordDecoder decoder
@@ -109,7 +109,7 @@ public class VersionedStore {
         txn.close();
 
         var query = new TimelineQuery();
-        var session = new WriteSession(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
+        var session = new SessionWriter(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
 
         return new VersionedStore(backend, config, bound, db, index, query, buffer, session, compactor, encoder, decoder);
     }
@@ -226,7 +226,7 @@ public class VersionedStore {
         // from now on new writes on in this session with new buffer and new index
         var txn = backend.beginWrite();
         compactor = BatchCompactor.create(txn, db, config.deleteBatchSize(), retained, decoder);
-        session = new WriteSession(config, db, txn, index.txn(), query, buffer, bound, encoder, decoder, compactor);
+        session = new SessionWriter(config, db, txn, index.txn(), query, buffer, bound, encoder, decoder, compactor);
 
         return new CompactResult.Ok();
     }
@@ -234,7 +234,7 @@ public class VersionedStore {
     public void sync() {
         session.commit();
         renewBuffer();
-        session = new WriteSession(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
+        session = new SessionWriter(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
     }
 
     public Writer writer() {
@@ -251,7 +251,7 @@ public class VersionedStore {
             // records can be present in backend but can hold old buffer
             // so two views of same data, while reading keep this in mind
             renewBuffer();
-            session = new WriteSession(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
+            session = new SessionWriter(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
         }
         return session;
     }
