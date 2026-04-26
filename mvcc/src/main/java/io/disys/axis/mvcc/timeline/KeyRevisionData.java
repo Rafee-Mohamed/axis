@@ -2,6 +2,12 @@ package io.disys.axis.mvcc.timeline;
 
 import io.disys.axis.mvcc.model.Revision;
 
+/**
+ * A {@link RevisionData} paired with its key.
+ *
+ * @param key   the key
+ * @param data  the revision metadata
+ */
 public record KeyRevisionData(
         byte[] key,
        RevisionData data
