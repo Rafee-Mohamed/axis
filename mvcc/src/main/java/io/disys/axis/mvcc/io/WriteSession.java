@@ -87,6 +87,7 @@ public class WriteSession implements Writer {
         }
         ordinal = 0;
         buffer.publish();
+        tlTxn.commit();
         bound.advance();
     }
 
