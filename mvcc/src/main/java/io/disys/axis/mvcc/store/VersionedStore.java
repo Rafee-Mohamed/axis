@@ -76,6 +76,7 @@ public class VersionedStore {
 
         var db = getDb(config);
         var txn = backend.beginRead();
+        var tlTxn = index.txn();
 
         var bound = getBound(txn, db.meta());
 
@@ -84,9 +85,13 @@ public class VersionedStore {
                 var revision = decoder.decodeRevision(kv.key());
                 var record = decoder.decodeRecord(kv.val());
 
-                index.restore(revision, record);
+                tlTxn.restore(revision, record);
             }
         }
+
+        tlTxn.commit();
+
+        tlTxn = index.txn();
 
         var buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
         var completedCompactionCommitSeq = commitSeq(txn, db.meta(), db.meta().completedCompactionCommitSeqKey());
@@ -96,10 +101,11 @@ public class VersionedStore {
         if (bound.start() == completedCompactionCommitSeq) {
             compactor = BatchCompactor.completed();
         } else {
-            var retained = index.compact(bound.start());
+            var retained = tlTxn.compact(bound.start());
             compactor = BatchCompactor.create(txn, db, config.deleteBatchSize(), retained, decoder);
         }
 
+        tlTxn.commit();
         txn.close();
 
         var query = new TimelineQuery();
