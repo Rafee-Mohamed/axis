@@ -7,9 +7,13 @@ import java.nio.ByteBuffer;
 
 import static io.disys.axis.mvcc.codec.CodecConstants.*;
 
-
+/** Encodes {@link Revision} and {@link Record} instances to their binary representations. */
 public class RecordEncoder {
 
+    /**
+     * @param revision  the revision to encode
+     * @return the encoded revision bytes per the layout in {@link CodecConstants}
+     */
     public byte[] encode(Revision revision) {
         var encodedRevision = ByteBuffer.allocate(REVISION_SIZE);
         encodedRevision.putLong(revision.commitSeq());
@@ -17,6 +21,10 @@ public class RecordEncoder {
         return encodedRevision.array();
     }
 
+    /**
+     * @param record  the record to encode
+     * @return the encoded record bytes per the layout in {@link CodecConstants}
+     */
     public byte[] encode(Record record) {
         var key = record.key();
         var val = record.val();
@@ -37,7 +45,10 @@ public class RecordEncoder {
         return encodedRecord.array();
     }
 
-
+    /**
+     * @param rr  the revision record to encode
+     * @return an {@link EncodedRevisionRecord} containing the encoded revision and record
+     */
     public EncodedRevisionRecord encode(RevisionRecord rr) {
         return new EncodedRevisionRecord(
                 encode(rr.revision()),
