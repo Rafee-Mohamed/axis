@@ -30,6 +30,8 @@ public interface Reader extends AutoCloseable {
     SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq);
     SnapshotResult<Long> countAt(byte[] from, byte[] to, long commitSeq, CountOptions options);
 
+    long revision();
+
     ReadHandle handle();
     @Override
     void close();

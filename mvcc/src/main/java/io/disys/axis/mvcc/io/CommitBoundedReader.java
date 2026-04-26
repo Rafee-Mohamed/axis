@@ -2,7 +2,6 @@ package io.disys.axis.mvcc.io;
 
 import io.disys.axis.backend.ReadHandle;
 import io.disys.axis.mvcc.codec.*;
-import io.disys.axis.mvcc.error.*;
 import io.disys.axis.mvcc.model.*;
 import io.disys.axis.mvcc.model.Record;
 import io.disys.axis.mvcc.store.*;
@@ -102,17 +101,18 @@ public class CommitBoundedReader implements Reader {
         return commitSeq > lastCommitSeq;
     }
 
-    Record get(byte[] key, RevisionData data) {
+    Record get(RevisionData data) {
         return buffer.get(data.revision())
                 .map(RevisionRecord::record)
                 .or(() -> txn.get(db.revision(), encoder.encode(data.revision()))
                         .map(decoder::decodeRecord))
                 .orElseThrow(() ->
-                        new InconsistentStoreException.MissingRecordForRevision(key, data.revision(), firstCommitSeq, lastCommitSeq));
+                        new IllegalStateException("CommitBoundedReader: Record missing for timeline-selected revision: revision=%s, revision bounds=[%d..%d]"
+                                .formatted(data.revision(), firstCommitSeq, lastCommitSeq)));
     }
 
     Record get(KeyRevisionData krd) {
-        return get(krd.key(), krd.data());
+        return get(krd.data());
     }
 
     private <T> SnapshotResult<T> snapshotResultOutsideWindow(long commitSeq) {
@@ -131,14 +131,14 @@ public class CommitBoundedReader implements Reader {
 
     @Override
     public Optional<Record> get(byte[] key) {
-        return view.getAt(key, lastCommitSeq).map(rd -> get(key, rd));
+        return view.getAt(key, lastCommitSeq).map(this::get);
     }
 
     @Override
     public SnapshotResult<Optional<Record>> getAt(byte[] key, long commitSeq) {
         var result = this.<Optional<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                view.getAt(key, commitSeq).map(rd -> get(key, rd))
+                view.getAt(key, commitSeq).map(this::get)
         );
     }
 
@@ -237,6 +237,11 @@ public class CommitBoundedReader implements Reader {
         var result = this.<Long>snapshotResultOutsideWindow(commitSeq);
         if (result != null) return result;
         return new SnapshotResult.Ok<>(query.count(view.rangeAt(from, to, commitSeq), options));
+    }
+
+    @Override
+    public long revision() {
+        return lastCommitSeq;
     }
 
     // ===================== handle / close =====================

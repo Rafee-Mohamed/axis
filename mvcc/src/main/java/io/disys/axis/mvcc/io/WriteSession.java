@@ -2,7 +2,6 @@ package io.disys.axis.mvcc.io;
 
 import io.disys.axis.backend.WriteHandle;
 import io.disys.axis.mvcc.codec.*;
-import io.disys.axis.mvcc.error.*;
 import io.disys.axis.mvcc.model.*;
 import io.disys.axis.mvcc.model.Record;
 import io.disys.axis.mvcc.store.*;
@@ -11,6 +10,8 @@ import io.disys.axis.mvcc.timeline.*;
 import io.disys.axis.backend.WriteTxn;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
@@ -118,6 +119,13 @@ public class WriteSession implements Writer {
     }
 
     @Override
+    public Optional<Record> putAndGet(byte[] key, byte[] val) {
+        var record = get(key);
+        put(key, val);
+        return record;
+    }
+
+    @Override
     public boolean delete(byte[] key) {
         var revision = Revision.modify(bound.next(), ordinal++);
         var span = tlTxn.complete(key, revision);
@@ -130,6 +138,13 @@ public class WriteSession implements Writer {
         buffer.stage(new RevisionRecord(revision, record));
         txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
         return true;
+    }
+
+    @Override
+    public Optional<Record> deleteAndGet(byte[] key) {
+        var existingRecord = get(key);
+        existingRecord.ifPresent(_ -> delete(key));
+        return existingRecord;
     }
 
     @Override
@@ -159,21 +174,57 @@ public class WriteSession implements Writer {
     }
 
     @Override
+    public List<Record> deleteRangeAndGet(byte[] from, byte[] to) {
+        var revisionsBeforeDeletion = new ArrayList<RevisionData>();
+        var nextCommitSeq = bound.next();
+        var mapper = new BiFunction<byte[], KeyTimeline, Optional<RevisionRecord>>() {
+            Revision revision = new Revision(nextCommitSeq, ordinal);;
+            @Override
+            public Optional<RevisionRecord> apply(byte[] key, KeyTimeline timeline) {
+                var rd = timeline.getAt(nextCommitSeq);
+                rd.ifPresent(revisionsBeforeDeletion::add);
+                if (rd.isEmpty() || !timeline.tryComplete(revision)) {
+                    return Optional.empty();
+                }
+                var nextRevisionRecord = new RevisionRecord(revision, new Record(key, timeline.lastSpan()));
+                revision = revision.next();
+                return Optional.of(nextRevisionRecord);
+            }
+        };
+
+        tlTxn.range(from, to, mapper)
+                .forEach(rr -> {
+                    buffer.stage(rr);
+                    txn.put(db.revision(), encoder.encode(rr.revision()), encoder.encode(rr.record()));
+                });
+
+        ordinal = mapper.revision.ordinal();
+
+        return revisionsBeforeDeletion.stream().map(this::get).toList();
+    }
+
+    @Override
+    public long revision() {
+        return ordinal == 0 ? bound.end() : bound.next();
+    }
+
+    @Override
     public WriteHandle handle() {
         return txn;
     }
 
-    Record get(byte[] key, RevisionData data) {
+    Record get(RevisionData data) {
         return buffer.get(data.revision())
                 .map(RevisionRecord::record)
                 .or(() -> txn.get(db.revision(), encoder.encode(data.revision()))
                         .map(decoder::decodeRecord))
                 .orElseThrow(() ->
-                        new InconsistentStoreException.MissingRecordForRevision(key, data.revision(), bound.start(), bound.end()));
+                        new IllegalStateException("WriteSession: Record missing for timeline-selected revision: revision=%s, revision bounds=[%d..%d], ordinal=%d"
+                                .formatted(data.revision(), bound.start(), bound.end(), ordinal)));
     }
 
     Record get(KeyRevisionData krd) {
-        return get(krd.key(), krd.data());
+        return get(krd.data());
     }
     private <T> SnapshotResult<T> snapshotResultOutsideWindow(long commitSeq) {
         if (compacted(commitSeq)) {
@@ -190,7 +241,7 @@ public class WriteSession implements Writer {
 
     @Override
     public Optional<Record> get(byte[] key) {
-        return tlTxn.getAt(key, bound.next()).map(r -> get(key, r));
+        return tlTxn.getAt(key, bound.next()).map(this::get);
     }
 
 
@@ -198,7 +249,7 @@ public class WriteSession implements Writer {
     public SnapshotResult<Optional<Record>> getAt(byte[] key, long commitSeq) {
         var result = this.<Optional<Record>>snapshotResultOutsideWindow(commitSeq);
         return result != null ? result : new SnapshotResult.Ok<>(
-                tlTxn.getAt(key, commitSeq).map(r -> get(key, r))
+                tlTxn.getAt(key, commitSeq).map(this::get)
         );
     }
 
