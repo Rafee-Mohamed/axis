@@ -28,7 +28,7 @@ import io.disys.axis.mvcc.model.CountOptions;
 import io.disys.axis.mvcc.model.Page;
 import io.disys.axis.mvcc.model.RangeOptions;
 import io.disys.axis.mvcc.store.Reader;
-import io.disys.axis.mvcc.store.SnapshotResult;
+import io.disys.axis.mvcc.model.SnapshotResult;
 import io.disys.axis.mvcc.model.SortDirection;
 import io.disys.axis.mvcc.model.SortTarget;
 
