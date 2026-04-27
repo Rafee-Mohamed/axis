@@ -51,7 +51,7 @@ public class CommitBoundedReader implements Reader {
 
     private final RecordDecoder decoder;
 
-    private final VersionedStore.Db db;
+    private final Db db;
 
     /** Inclusive lower bound; the compaction boundary. Requests below this are Compacted. */
     private final long firstCommitSeq;
@@ -60,7 +60,7 @@ public class CommitBoundedReader implements Reader {
     private final long lastCommitSeq;
 
     private CommitBoundedReader(
-            VersionedStore.Db db,
+            Db db,
             TimelineView view,
             TimelineQuery query,
             ReadTxn txn,
@@ -81,7 +81,7 @@ public class CommitBoundedReader implements Reader {
         this.lastCommitSeq = lastCommitSeq;
     }
 
-    private static long getCommitSeq(ReadTxn txn, VersionedStore.MetaDb db, byte[] key) {
+    private static long getCommitSeq(ReadTxn txn, MetaDb db, byte[] key) {
         return txn.get(db, key)
                 .map(b -> ByteBuffer.allocate(Long.BYTES).put(b).flip().getLong())
                 .orElse(0L);
@@ -92,7 +92,7 @@ public class CommitBoundedReader implements Reader {
      * {@code firstCommitSeq} from the backend meta and pinning a buffer view at that seq.
      */
     public static CommitBoundedReader create(
-            VersionedStore.Db db,
+            Db db,
             TimelineView view,
             TimelineQuery query,
             ReadTxn txn,

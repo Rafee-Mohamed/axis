@@ -54,7 +54,7 @@ public class SessionWriter implements Writer {
 
     private final RecordDecoder decoder;
 
-    private final VersionedStore.Db db;
+    private final Db db;
 
     /** Wall-clock deadline in nanoseconds; session expires when {@code System.nanoTime()} reaches this. */
     private final long expiryTime;
@@ -67,7 +67,7 @@ public class SessionWriter implements Writer {
 
     public SessionWriter(
             VersionedStoreConfig config,
-            VersionedStore.Db db,
+            Db db,
             WriteTxn txn,
             TimelineTxn tlTxn,
             TimelineQuery query,

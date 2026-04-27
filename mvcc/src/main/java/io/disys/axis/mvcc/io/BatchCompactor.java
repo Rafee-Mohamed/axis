@@ -1,12 +1,11 @@
 package io.disys.axis.mvcc.io;
 
 import io.disys.axis.backend.ReadHandle;
-import io.disys.axis.backend.ReadTxn;
 import io.disys.axis.backend.WriteTxn;
 import io.disys.axis.mvcc.codec.CodecConstants;
 import io.disys.axis.mvcc.codec.RecordDecoder;
 import io.disys.axis.mvcc.model.Revision;
-import io.disys.axis.mvcc.store.VersionedStore;
+import io.disys.axis.mvcc.store.Db;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -26,7 +25,7 @@ public class BatchCompactor {
     private byte[] compactedRevision;
     /** Exclusive upper boundary — the first revision at the compaction commitSeq (ordinal 0). */
     private final byte[] visibleRevision;
-    private final VersionedStore.Db db;
+    private final Db db;
     /** Floor revisions that must survive compaction to answer queries at the compaction point. */
     private final Set<Revision> retained;
     private final RecordDecoder decoder;
@@ -34,7 +33,7 @@ public class BatchCompactor {
     private boolean done;
 
     public BatchCompactor(
-            VersionedStore.Db db,
+            Db db,
             int batchSize,
             byte[] compactedRevision,
             byte[] visibleRevision,
@@ -64,7 +63,7 @@ public class BatchCompactor {
      */
     public static BatchCompactor create(
             ReadHandle handle,
-            VersionedStore.Db db,
+            Db db,
             int batchSize,
             Set<Revision> retained,
             RecordDecoder decoder
