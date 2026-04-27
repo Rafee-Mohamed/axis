@@ -11,6 +11,8 @@ import io.disys.axis.mvcc.io.RevisionRecordBuffer;
 import io.disys.axis.mvcc.io.SessionWriter;
 import io.disys.axis.mvcc.model.CommitSeqBound;
 import io.disys.axis.mvcc.model.CompactResult;
+import io.disys.axis.mvcc.model.Revision;
+import io.disys.axis.mvcc.model.Record;
 import io.disys.axis.mvcc.timeline.KeyTimelineIndex;
 import io.disys.axis.mvcc.timeline.TimelineQuery;
 import io.dsal.versioned.index.persistent.PersistentBPlusTree;
@@ -18,6 +20,7 @@ import io.dsal.versioned.index.persistent.layout.LexigographicPackedByteComparat
 import io.dsal.versioned.index.persistent.layout.PackedByteKeyStorageFactory;
 
 import java.nio.ByteBuffer;
+import java.util.function.BiConsumer;
 
 /**
  * {@link VersionedStore} implementation backed by a persistent B+ tree timeline index
@@ -58,10 +61,10 @@ public class TimelineVersionedStore implements VersionedStore {
 
     private final TimelineVersionedStoreConfig config;
 
-    /** Encodes {@link io.disys.axis.mvcc.model.Revision} and {@link io.disys.axis.mvcc.model.Record} instances to byte arrays for backend storage. */
+    /** Encodes {@link Revision} and {@link Record} instances to byte arrays for backend storage. */
     private final RecordEncoder encoder;
 
-    /** Decodes byte arrays from the backend to {@link io.disys.axis.mvcc.model.Revision} and {@link io.disys.axis.mvcc.model.Record} instances. */
+    /** Decodes byte arrays from the backend to {@link Revision} and {@link Record} instances. */
     private final RecordDecoder decoder;
 
     /** Handles to the version and meta backend databases. */
@@ -105,12 +108,28 @@ public class TimelineVersionedStore implements VersionedStore {
         this.decoder = decoder;
     }
 
+    /** Delegates to {@link #restore(Backend, TimelineVersionedStoreConfig, BiConsumer)} with a no-op observer. */
+    public static TimelineVersionedStore restore(Backend backend, TimelineVersionedStoreConfig config) {
+        return restore(backend, config, (_, _) -> {});
+    }
+
     /**
      * Reconstructs store state from the backend: replays all persisted revision records
      * into the timeline index, recovers the commit bounds, and resumes any in-progress
-     * compaction batch before opening a fresh write session.
+     * compaction batch before opening a fresh write session. Each revision record is
+     * passed to {@code observer} in order, allowing callers to rebuild derived state
+     * (e.g. lease key attachments) in a single pass.
+     *
+     * @param backend   the storage backend to restore from
+     * @param config    store configuration
+     * @param observer  called once per revision record in revision order; receives the
+     *                  decoded {@link Revision} and its {@link Record}
      */
-    public static TimelineVersionedStore restore(Backend backend, TimelineVersionedStoreConfig config) {
+    public static TimelineVersionedStore restore(
+            Backend backend,
+            TimelineVersionedStoreConfig config,
+            BiConsumer<Revision, Record> observer
+    ) {
         var encoder = new RecordEncoder();
         var decoder = new RecordDecoder();
         var index = new KeyTimelineIndex(new PersistentBPlusTree<>(
@@ -130,6 +149,7 @@ public class TimelineVersionedStore implements VersionedStore {
                 var record = decoder.decodeRecord(kv.val());
 
                 tlTxn.restore(revision, record);
+                observer.accept(revision, record);
             }
         }
 
