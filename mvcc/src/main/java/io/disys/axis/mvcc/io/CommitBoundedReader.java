@@ -12,32 +12,51 @@ import io.disys.axis.backend.ReadTxn;
 import java.nio.ByteBuffer;
 import java.util.Optional;
 
+/**
+ * {@link Reader} implementation bounded to a fixed commit window
+ * {@code [firstCommitSeq, lastCommitSeq]}.
+ *
+ * <p>Records are resolved buffer-first: the pinned {@link RevisionRecordBuffer.View} is
+ * checked before the backend {@link ReadTxn}, bridging the gap between logical commits
+ * and backend flushes. The backend covers {@code [firstCommitSeq, persistedCommitSeq]};
+ * the buffer covers at minimum {@code (persistedCommitSeq, lastCommitSeq]}.</p>
+ *
+ * <p>Reads below {@code firstCommitSeq} return {@link SnapshotResult.Compacted};
+ * reads above {@code lastCommitSeq} return {@link SnapshotResult.Future}.</p>
+ */
 public class CommitBoundedReader implements Reader {
 
+    /**
+     * Snapshot of the key timeline index taken at reader creation; contains at least all
+     * revisions up to {@code lastCommitSeq}. Resolves which revision of a key was current
+     * at a given commitSeq.
+     */
     private final TimelineView view;
+
     private final TimelineQuery query;
+
+    /** Backend read transaction; authoritative for {@code [firstCommitSeq, persistedCommitSeq]}. */
     private final ReadTxn txn;
-    // the buffer view is an immutable view into the actual buffer
-    // the buffer should be within the bounds of firstCommitSeq and lastCommitSeq
+
+    /**
+     * Pinned buffer snapshot bounded to {@code lastCommitSeq}. Covers at minimum
+     * {@code (persistedCommitSeq, lastCommitSeq]}; may also hold records at or before
+     * {@code persistedCommitSeq} not yet flushed to the backend, and records beyond
+     * {@code lastCommitSeq} staged by a concurrent writer — both are outside the read
+     * window and ignored.
+     */
     private final RevisionRecordBuffer.View buffer;
+
     private final RecordEncoder encoder;
+
     private final RecordDecoder decoder;
+
     private final VersionedStore.Db db;
-    // bounds [firstCommitSeq, persistedCommitSeq, lastCommitSeq]
-    // [firstCommitSeq, persistedCommitSeq] - present in backend
-    // (persistedCommitSeq, lastCommitSeq] - at least present in buffer
-    // buffer can contain records before persistedCommitSeq but not always.
-    // buffer can also contain records beyond written by concurrent writer
-    // but reader should be within bounds
-    //
-    // firstCommitSeq is visible min seq - seq before this are compacted
-    // persistedCommitSeq is the max seq that is in backend
-    //
-    //
-    // all the reads are expected to get valid correct result for all
-    // revisions within this bound
-    // the reads won't access anything out of this bound
+
+    /** Inclusive lower bound; the compaction boundary. Requests below this are Compacted. */
     private final long firstCommitSeq;
+
+    /** Inclusive upper bound; this reader's fixed commitSeq. */
     private final long lastCommitSeq;
 
     private CommitBoundedReader(
@@ -68,6 +87,10 @@ public class CommitBoundedReader implements Reader {
                 .orElse(0L);
     }
 
+    /**
+     * Creates a reader pinned to {@code bound.end()} as {@code lastCommitSeq}, reading
+     * {@code firstCommitSeq} from the backend meta and pinning a buffer view at that seq.
+     */
     public static CommitBoundedReader create(
             VersionedStore.Db db,
             TimelineView view,
@@ -101,6 +124,10 @@ public class CommitBoundedReader implements Reader {
         return commitSeq > lastCommitSeq;
     }
 
+    /**
+     * Resolves a record by checking the buffer first, then the backend transaction.
+     * The buffer covers recently committed records not yet flushed to the backend.
+     */
     Record get(RevisionData data) {
         return buffer.get(data.revision())
                 .map(RevisionRecord::record)
@@ -115,6 +142,10 @@ public class CommitBoundedReader implements Reader {
         return get(krd.data());
     }
 
+    /**
+     * @return Compacted if {@code commitSeq} is below the compaction boundary,
+     *         Future if above the reader's fixed seq, null if within the visible window
+     */
     private <T> SnapshotResult<T> snapshotResultOutsideWindow(long commitSeq) {
         if (compacted(commitSeq)) {
             return new SnapshotResult.Compacted<>(firstCommitSeq, commitSeq);

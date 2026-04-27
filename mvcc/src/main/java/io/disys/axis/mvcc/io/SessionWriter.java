@@ -16,18 +16,53 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 
+/**
+ * {@link Writer} implementation that accumulates writes within a single logical commitSeq.
+ * Each write advances {@code ordinal} within {@code bound.next()}, staging records into
+ * the {@link RevisionRecordBuffer} and {@link TimelineTxn} for immediate read visibility.
+ *
+ * <p>Writes are buffered to defer backend flushes — flushing on every logical commit would
+ * impose the cost of frequent I/O. The {@link RevisionRecordBuffer} bridges logical commits
+ * and backend persistence by making staged records readable without waiting for a flush.</p>
+ *
+ * <p>{@link #close()} is the logical commit: publishes the buffer, commits the timeline
+ * transaction, and advances the committed bound. {@link #commit()} additionally flushes
+ * the backend transaction and runs one batch of deferred compaction.</p>
+ *
+ * <p>The session expires when the buffer reaches capacity or the sync timeout elapses.
+ * {@link #commitIfExpired()} is called by the store before vending a new writer to keep
+ * the buffer and backend within bounds.</p>
+ */
 public class SessionWriter implements Writer {
+    /** Backend write transaction; accumulates puts/deletes until {@link #commit()} flushes them. */
     private final WriteTxn txn;
+
+    /** In-memory timeline transaction; committed on {@link #close()} to make writes queryable. */
     private final TimelineTxn tlTxn;
+
     private final TimelineQuery query;
+
+    /** Accumulates {@link RevisionRecord}s; published on {@link #close()} to make records visible to readers. */
     private final RevisionRecordBuffer buffer;
+
+    /** Tracks the visible commit window; advanced on {@link #close()}. */
     private final CommitSeqBound bound;
+
     private final VersionedStoreConfig config;
+
     private final RecordEncoder encoder;
+
     private final RecordDecoder decoder;
+
     private final VersionedStore.Db db;
+
+    /** Wall-clock deadline in nanoseconds; session expires when {@code System.nanoTime()} reaches this. */
     private final long expiryTime;
+
+    /** Position within the current commitSeq; incremented per staged write, reset to 0 on {@link #close()}. */
     private int ordinal;
+
+    /** Runs one deletion batch per {@link #commit()}. */
     private final BatchCompactor compactor;
 
     public SessionWriter(
@@ -56,11 +91,18 @@ public class SessionWriter implements Writer {
         this.compactor = compactor;
     }
 
+    /** @return true if the buffer has reached capacity or the sync timeout has elapsed */
     boolean expired() {
         return buffer.size() >= config.maxRevisionRecordBuffer() ||
                 System.nanoTime() >= expiryTime;
     }
 
+    /**
+     * Commits and returns whether the session was expired. Called by the store before
+     * vending a new {@link Writer} to keep the buffer and backend within bounds.
+     *
+     * @return true if the session was expired and a commit was triggered
+     */
     public boolean commitIfExpired() {
         if (expired()) {
             commit();
@@ -70,6 +112,10 @@ public class SessionWriter implements Writer {
         return false;
     }
 
+    /**
+     * Logical commit followed by a backend flush and one compaction batch step.
+     * Persists the updated {@code persistedCommitSeq} to meta and closes the transaction.
+     */
     public void commit() {
         close();
         txn.put(
@@ -81,15 +127,34 @@ public class SessionWriter implements Writer {
         txn.close();
     }
 
+    /**
+     * Logical commit: publishes staged records to the buffer, commits the timeline
+     * transaction, and advances the committed bound. Has no effect if no writes were staged.
+     */
     @Override
     public void close() {
         if (ordinal == 0) {
             return;
         }
         ordinal = 0;
+        // buffer.publish() and tlTxn.commit() must precede bound.advance(): a reader that
+        // observes the advanced bound immediately queries the buffer and timeline, so both
+        // must already reflect this commitSeq before the bound becomes visible.
         buffer.publish();
         tlTxn.commit();
         bound.advance();
+    }
+
+    /**
+     * Writes {@code commitSeq} as the new compaction boundary to meta and updates
+     * the in-memory bound.
+     */
+    public void compact(long commitSeq) {
+        txn.put(
+                db.meta(),
+                db.meta().firstCommitSeqKey(),
+                ByteBuffer.allocate(Long.BYTES).putLong(commitSeq).array());
+        bound.compact(commitSeq);
     }
 
     private boolean compacted(long commitSeq) {
@@ -100,12 +165,38 @@ public class SessionWriter implements Writer {
         return commitSeq > bound.next();
     }
 
-    public void compact(long commitSeq) {
-        txn.put(
-                db.meta(),
-                db.meta().firstCommitSeqKey(),
-                ByteBuffer.allocate(Long.BYTES).putLong(commitSeq).array());
-        bound.compact(commitSeq);
+    /**
+     * @return Compacted if {@code commitSeq} is below the compaction boundary,
+     *         Future if above the writer's current commitSeq, null if within the visible window
+     */
+    private <T> SnapshotResult<T> snapshotResultOutsideWindow(long commitSeq) {
+        if (compacted(commitSeq)) {
+            return new SnapshotResult.Compacted<>(bound.start(), commitSeq);
+        }
+
+        if (future(commitSeq)) {
+            return new SnapshotResult.Future<>(bound.next(), commitSeq);
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolves a record by checking the buffer first, then the backend write transaction.
+     * Staged writes are in the buffer; previously committed records are in the backend.
+     */
+    Record get(RevisionData data) {
+        return buffer.get(data.revision())
+                .map(RevisionRecord::record)
+                .or(() -> txn.get(db.revision(), encoder.encode(data.revision()))
+                        .map(decoder::decodeRecord))
+                .orElseThrow(() ->
+                        new IllegalStateException("SessionWriter: Record missing for timeline-selected revision: revision=%s, revision bounds=[%d..%d], ordinal=%d"
+                                .formatted(data.revision(), bound.start(), bound.end(), ordinal)));
+    }
+
+    Record get(KeyRevisionData krd) {
+        return get(krd.data());
     }
 
     @Override
@@ -213,37 +304,12 @@ public class SessionWriter implements Writer {
         return txn;
     }
 
-    Record get(RevisionData data) {
-        return buffer.get(data.revision())
-                .map(RevisionRecord::record)
-                .or(() -> txn.get(db.revision(), encoder.encode(data.revision()))
-                        .map(decoder::decodeRecord))
-                .orElseThrow(() ->
-                        new IllegalStateException("SessionWriter: Record missing for timeline-selected revision: revision=%s, revision bounds=[%d..%d], ordinal=%d"
-                                .formatted(data.revision(), bound.start(), bound.end(), ordinal)));
-    }
-
-    Record get(KeyRevisionData krd) {
-        return get(krd.data());
-    }
-    private <T> SnapshotResult<T> snapshotResultOutsideWindow(long commitSeq) {
-        if (compacted(commitSeq)) {
-            return new SnapshotResult.Compacted<>(bound.start(), commitSeq);
-        }
-
-        if (future(commitSeq)) {
-            return new SnapshotResult.Future<>(bound.next(), commitSeq);
-        }
-
-        return null;
-    }
-
+    // ===================== Reader methods =====================
 
     @Override
     public Optional<Record> get(byte[] key) {
         return tlTxn.getAt(key, bound.next()).map(this::get);
     }
-
 
     @Override
     public SnapshotResult<Optional<Record>> getAt(byte[] key, long commitSeq) {
