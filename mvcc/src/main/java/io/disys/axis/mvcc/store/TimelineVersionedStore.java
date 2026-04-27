@@ -19,22 +19,69 @@ import io.dsal.versioned.index.persistent.layout.PackedByteKeyStorageFactory;
 
 import java.nio.ByteBuffer;
 
+/**
+ * {@link VersionedStore} implementation backed by a persistent B+ tree timeline index
+ * and a write-buffered backend.
+ *
+ * <p>A single {@link SessionWriter} accumulates logical commits into a
+ * {@link RevisionRecordBuffer} until the buffer reaches capacity or the session
+ * timeout elapses. Buffered records bridge the gap between logical commit visibility
+ * and backend persistence: readers resolve records from the buffer first, falling
+ * back to the backend transaction. {@link #sync()} and session expiry flush the
+ * backend explicitly.</p>
+ *
+ * <p>The timeline index ({@link KeyTimelineIndex}) tracks the full revision history
+ * of each key. Compaction advances the visibility boundary and prunes the index, but
+ * defers physical deletion of backend records to incremental {@link BatchCompactor}
+ * batches, keeping write latency flat.</p>
+ */
 public class TimelineVersionedStore implements VersionedStore {
+
+    /** Persistent B+ tree index mapping each key to its ordered revision history. */
     private final KeyTimelineIndex index;
+
+    /** Executes paged and counted queries over timeline range results. */
     private final TimelineQuery query;
+
+    /** Underlying storage backend; vends read and write transactions. */
     private final Backend backend;
+
+    /**
+     * Shared buffer holding revision records staged since the last backend flush.
+     * Declared {@code volatile} so buffer swaps in {@link #renewBuffer()} are
+     * immediately visible to threads calling {@link #reader()}.
+     */
     private volatile RevisionRecordBuffer buffer;
+
+    /** Mutable commit window; tracks the compaction boundary ({@code start}) and the last committed seq ({@code end}). */
     private final CommitSeqBound bound;
-    private final VersionedStoreConfig config;
+
+    private final TimelineVersionedStoreConfig config;
+
+    /** Encodes {@link io.disys.axis.mvcc.model.Revision} and {@link io.disys.axis.mvcc.model.Record} instances to byte arrays for backend storage. */
     private final RecordEncoder encoder;
+
+    /** Decodes byte arrays from the backend to {@link io.disys.axis.mvcc.model.Revision} and {@link io.disys.axis.mvcc.model.Record} instances. */
     private final RecordDecoder decoder;
+
+    /** Handles to the version and meta backend databases. */
     private final Db db;
+
+    /**
+     * Active write session; accumulates logical commits into the buffer until expired,
+     * then renewed on the next {@link #writer()} call.
+     */
     private SessionWriter session;
+
+    /**
+     * Runs one batch of physical record deletion per commit, draining the backlog
+     * of backend records below the compaction boundary.
+     */
     private BatchCompactor compactor;
 
     private TimelineVersionedStore(
             Backend backend,
-            VersionedStoreConfig config,
+            TimelineVersionedStoreConfig config,
             CommitSeqBound bound,
             Db db,
             KeyTimelineIndex index,
@@ -56,10 +103,14 @@ public class TimelineVersionedStore implements VersionedStore {
         this.db = db;
         this.encoder = encoder;
         this.decoder = decoder;
-
     }
 
-    public static TimelineVersionedStore restore(Backend backend, VersionedStoreConfig config) {
+    /**
+     * Reconstructs store state from the backend: replays all persisted revision records
+     * into the timeline index, recovers the commit bounds, and resumes any in-progress
+     * compaction batch before opening a fresh write session.
+     */
+    public static TimelineVersionedStore restore(Backend backend, TimelineVersionedStoreConfig config) {
         var encoder = new RecordEncoder();
         var decoder = new RecordDecoder();
         var index = new KeyTimelineIndex(new PersistentBPlusTree<>(
@@ -107,7 +158,7 @@ public class TimelineVersionedStore implements VersionedStore {
         return new TimelineVersionedStore(backend, config, bound, db, index, query, buffer, session, compactor, encoder, decoder);
     }
 
-    private static Db getDb(VersionedStoreConfig config) {
+    private static Db getDb(TimelineVersionedStoreConfig config) {
         var metaDb = new MetaDb(
                 config.metaDB(),
                 config.persistedCommitSeq().getBytes(),
@@ -133,22 +184,17 @@ public class TimelineVersionedStore implements VersionedStore {
                 .orElse(0L);
     }
 
-    // Multi thread access
-
-    // multiple readers allowed, can called by multiple threads to get readers
+    @Override
     public Reader reader() {
         return CommitBoundedReader.create(db, index.view(), query, backend.beginRead(), buffer, encoder, decoder, bound);
     }
 
+    /** Swaps the shared buffer to a fresh instance; the volatile write is immediately visible to threads calling {@link #reader()}. */
     public void renewBuffer() {
         buffer = RevisionRecordBuffer.allocate(config.maxRevisionRecordBuffer());
     }
 
-    // Only single thread access for writer/compact/sync
-
-    // Behaviour of concurrent threads accessing these are undefined
-    // compact removes all revisions existed before given commitSeq
-    // that are not present as the point in time view of commitSeq
+    @Override
     public CompactResult compact(long commitSeq) {
         if (!compactor.done()) {
             return new CompactResult.InProgress();
@@ -161,62 +207,67 @@ public class TimelineVersionedStore implements VersionedStore {
         if (bound.end() < commitSeq) {
             return new CompactResult.FutureRevision(bound.start(), commitSeq);
         }
-        // add the compaction point
+
+        // Stage firstCommitSeq=N in the meta write txn and advance bound.start() in memory.
+        // The change is not yet committed to the backend; new backend read txns still see the old boundary.
         session.compact(commitSeq);
-        // ----- On creating new Reader, during this interleaving
-        // The reader gets the read txn as of now get the snapshot at this point
-        // therefore even if the records are deleted along with the session close
-        // the reader can see those data as the firstVisibleCommitSeq still not visible to
-        // reader. So, while deletion is happening, until the reader lives it can view the
-        // data as of this point
 
-        // commit the session flushes any writes and along with commit the compaction point as first visible seq
+        // --- reader created here [interleaving A] ---
+        //
+        //   backend   firstCommitSeq = old   persistedCommitSeq = old
+        //   buffer    current session buffer (records up to bound.end())
+        //   index     all revisions present
+        //
+        //   CommitBoundedReader reads firstCommitSeq from the backend txn; the write has
+        //   not committed yet, so the old boundary is still in effect. This reader answers
+        //   queries from old through bound.end() — it holds a snapshot taken before
+        //   compaction was visible.
+
+        // Flush the session: firstCommitSeq=N and all staged records land in the backend.
+        // From this point any new reader's backend txn sees firstCommitSeq=N.
         session.commit();
-        // after this any reader sees the compaction point as the first visible commit seq
-        // and reads within the bound even though the upcoming the buffer and index
-        // were not taken for read
 
-        // ----- On creating new Reader, during this interleaving
-        // the reader may hold the buffer and index as existing now therefore
-        // the buffer has the last subset of data that is just flushed into backend
-        // Therefore, at the same time the reader can see the same data as in both backend and buffer
-        // so the reader should merge or dedup based on persistedCommittedSeq from backend
-        // by which the overlapping set of data can be identified
-        // Also, the firstVisibleCommitSeq is updated to the compaction point in backend but
-        // the reader could see the old buffer and index which has data before the compaction
-        // point - once compaction point is committed in backend there is no guarantee on
-        // whether those revisions before that point will be in backend, it can be deleted in this point as well
-        // or if the reader tries to answer the query based on having data in the index or buffer
-        // if those data are before the compaction point, the reads may be inconsistent
-        // therefore reader should use the firstVisibleCommitSeq from the backend
-        // to bound any results returned, anything read beyond firstVisibleCommitSeq
-        // shouldn't return results from buffer or index even if it is present
-        // the invariant is that whenever the reader created whatever the bound it sees
-        // those data should be present for read, but anything beyond the bound nothing is
-        // guaranteed, this is snapshot isolation that the reader has
+        // --- reader created here [interleaving B] ---
+        //
+        //   backend   firstCommitSeq = N    persistedCommitSeq = E
+        //             records [N..E] physically present
+        //   buffer    pre-swap; may hold records below N from the just-committed session
+        //   index     all revisions present (not yet compacted)
+        //
+        //   CommitBoundedReader reads firstCommitSeq=N from the backend txn.
+        //   Buffer records below N are within the pinned view but are never returned —
+        //   any query below N returns Compacted. Snapshot isolation holds.
 
-        // buffer ref swap
+        // Swap the buffer to a fresh instance; the volatile write is immediately visible to reader().
         renewBuffer();
-        // ----- On creating new Reader, during this interleaving
-        // Same as the interleaving before, but the buffer will ge empty but index can
-        // have the data - buffer and index compact is not atomic, but that's not an issue
-        // if the reader keeps the read within bound. Any read before compaction point
-        // should be returned with compacted via published compact commitSeq in backend.
-        // The index is concurrently mutated by CoW therefore all readers must view the
-        // consistent state of index at any given point
+
+        // --- reader created here [interleaving C] ---
+        //
+        //   backend   firstCommitSeq = N    persistedCommitSeq = E
+        //             records [N..E] physically present
+        //   buffer    fresh (empty)
+        //   index     all revisions present (not yet compacted)
+        //
+        //   All data for [N..E] is exclusively in the backend. Index revisions below N
+        //   still exist but are unreachable — firstCommitSeq=N gates all results.
+
+        // Compact the timeline index to N via CoW: revisions strictly below N are pruned.
+        // Concurrent readers hold their own index snapshots; the CoW update is atomic from their perspective.
         var tlTxn = index.txn();
         var retained = tlTxn.compact(commitSeq);
         tlTxn.commit();
 
-        // ----- On creating new Reader, during this interleaving
-        // all the readers will see a consistent buffer, index and firstVisibleCommitSeq
-        // but the actual physical deletion is deferred. But, the only truth is
-        // the firstVisibleCommitSeq in backend any read before that seq is not allowed.
-        // allowing deletion to happen in async way. but the deletion can happen any time
-        // after the compaction point firstVisibleCommitSeq is committed. no guarantee
-        // on visibility of revisions before that compaction point
+        // --- reader created here [interleaving D] ---
+        //
+        //   backend   firstCommitSeq = N    persistedCommitSeq = E
+        //             records [N..E] physically present (records below N pending deletion)
+        //   buffer    fresh (empty)
+        //   index     revisions [N..E] only
+        //
+        //   Full consistency: backend, buffer, and index all agree on N as the boundary.
+        //   Backend records below N are physically present but unreachable;
+        //   BatchCompactor will remove them incrementally over subsequent commits.
 
-        // from now on new writes on in this session with new buffer and new index
         var txn = backend.beginWrite();
         compactor = BatchCompactor.create(txn, db, config.deleteBatchSize(), retained, decoder);
         session = new SessionWriter(config, db, txn, index.txn(), query, buffer, bound, encoder, decoder, compactor);
@@ -224,25 +275,25 @@ public class TimelineVersionedStore implements VersionedStore {
         return new CompactResult.Ok();
     }
 
+    @Override
     public void sync() {
+        // session.commit() flushes both the buffered revision records and one compaction batch step -
+        // the compactor runs as part of every backend flush.
         session.commit();
         renewBuffer();
         session = new SessionWriter(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
     }
 
+    @Override
     public Writer writer() {
         if (session.commitIfExpired()) {
-            // single buffer per session
-            // if older readers hold the buffer for read,
-            // then mutating the buffer - clear the buffer and use for every session
-            // can make the reads can't read from buffer and read txn can't also
-            // see the committed result as it sees as of read txn created
-            // can result in having a fresh txn but old buffer
-            // i.e. concurrent reader creation can be created with read txn that sees latest committed
-            // but can take the old buffer before changing it, in that case it is easy
-            // for the reader to merge the results, so there is a possibility that
-            // records can be present in backend but can hold old buffer
-            // so two views of same data, while reading keep this in mind
+            // Session expired: flush it and start fresh.
+            // A concurrent thread calling reader() may race between the buffer swap and the
+            // new session start. Such a reader may hold the old buffer snapshot along with a
+            // backend read txn that already reflects the just-flushed records. Because
+            // CommitBoundedReader resolves records from the buffer first and falls back to the
+            // backend, any overlap between the old buffer and the backend is harmless -
+            // both carry identical data for the same revision.
             renewBuffer();
             session = new SessionWriter(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
         }

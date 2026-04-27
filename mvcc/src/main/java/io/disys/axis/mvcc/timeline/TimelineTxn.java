@@ -6,7 +6,6 @@ import io.disys.axis.mvcc.model.SortDirection;
 import io.dsal.versioned.index.api.Direction;
 import io.dsal.versioned.index.api.Txn;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;

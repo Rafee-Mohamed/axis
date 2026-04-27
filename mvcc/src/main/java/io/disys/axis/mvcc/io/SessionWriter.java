@@ -13,7 +13,6 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 
 /**
@@ -48,7 +47,7 @@ public class SessionWriter implements Writer {
     /** Tracks the visible commit window; advanced on {@link #close()}. */
     private final CommitSeqBound bound;
 
-    private final VersionedStoreConfig config;
+    private final TimelineVersionedStoreConfig config;
 
     private final RecordEncoder encoder;
 
@@ -66,7 +65,7 @@ public class SessionWriter implements Writer {
     private final BatchCompactor compactor;
 
     public SessionWriter(
-            VersionedStoreConfig config,
+            TimelineVersionedStoreConfig config,
             Db db,
             WriteTxn txn,
             TimelineTxn tlTxn,
@@ -87,7 +86,7 @@ public class SessionWriter implements Writer {
         this.decoder = decoder;
         this.db = db;
         this.ordinal = 0;
-        this.expiryTime = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.revisionRecordBufferSyncTimeout());
+        this.expiryTime = System.nanoTime() + config.revisionRecordBufferSyncTimeout().toNanos();
         this.compactor = compactor;
     }
 
