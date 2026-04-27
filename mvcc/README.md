@@ -1,12 +1,11 @@
 # mvcc - Versioned Key-Value Store (Multi Version Concurrency Control)
 
-The `mvcc` module is the versioned key-value store at the heart of Axis. Every version of every 
-key is retained, enabling access to historical states. It is designed as a single-writer, 
-multi-reader system where reads and writes never block each other. Each reader operates under 
-snapshot isolation, observing a consistent, immutable view of the store at creation time, 
+The `mvcc` module is the versioned key-value store at the heart of Axis. Every version of every
+key is retained, enabling access to historical states. It is designed as a single-writer,
+multi-reader system where reads and writes never block each other. Each reader operates under
+snapshot isolation, observing a consistent, immutable view of the store at creation time,
 unaffected by concurrent or subsequent writes.
 
----
 
 ## The timeline
 
@@ -16,7 +15,7 @@ history as a single logical axis of time, where every write and every deletion h
 queryable position.
 
 Rather than storing only the current value of a key, the store retains that full history -
-every mutation indexed by a monotonically increasing logical clock called`commitSeq`. 
+every mutation indexed by a monotonically increasing logical clock called `commitSeq`.
 This makes any past state queryable: a reader can ask "what did key `a` look like
 at commit 6?" just as easily as asking for its current value.
 
@@ -30,35 +29,32 @@ The diagram below shows three keys across a shared timeline. Each row is one key
 the x-axis is `commitSeq`.
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                      │
-│  key a    ●───────────────────●───────────────────○                  ●────────────→  │
-│                                                                                      │
-│  key b              ●──────────────────────────────────●──────────────────────────○  │
-│                                                                                      │
-│  key c                                ●──────────────────────────────────────────→   │
-│                                                                                      │
-├─────────┬───────────┬───────────┬───────────┬───────────┬───────────┬──────────────→ │
-│         2           4           6           8          10          12    commitSeq   │
-└──────────────────────────────────────────────────────────────────────────────────────┘
++----------------------------------------------------------------------------------------+
+|                                                                                        |
+|  key a    ●---------------------●----------○                     ●-------------------> |
+|                                                                                        |
+|  key b               ●--------------------------------●----------○                     |
+|                                                                                        |
+|  key c                          ●----------------------------------------------------> |
+|                                                                                        |
+|-----------+----------+----------+----------+----------+----------+-------------------> |
+|           2          4          6          8         10         12  commitSeq          |
++----------------------------------------------------------------------------------------+
 
-  ●  value written (live)     ○  key deleted (tombstone)     →  key still alive
+  ●  value written (live)     ○  key deleted (tombstone)     ->  key still alive
 ```
-
-
 
 - `key a` is written at 2, updated at 6, deleted at 8, then recreated at 12 and still alive.
 - `key b` is written at 4, updated at 10, and deleted at 12.
 - `key c` is written at 6 and still alive.
 
----
 
 ## Concepts and terminology
 
 ### commitSeq
 
 A `commitSeq` is a monotonically increasing integer that advances by one for every logical
-commit. It is the store's logical clock. Every mutation is assigned the `commitSeq` of the 
+commit. It is the store's logical clock. Every mutation is assigned the `commitSeq` of the
 commit that produced it.
 
 ### Revision
@@ -69,9 +65,9 @@ single commit writes multiple keys, each write gets the same `commitSeq` and a d
 
 ```
 commit 6: put(key-a), put(key-b), put(key-c)
-  → Revision(6, 0)  key-a
-  → Revision(6, 1)  key-b
-  → Revision(6, 2)  key-c
+  -> Revision(6, 0)  key-a
+  -> Revision(6, 1)  key-b
+  -> Revision(6, 2)  key-c
 ```
 
 Revisions are totally ordered: compare `commitSeq` first, then `ordinal`.
@@ -84,7 +80,7 @@ deletion (or to "now" if still alive).
 - A **live span** (`LiveSpan`) is open-ended: the key exists and has not been deleted.
 - A **dead span** (`DeadSpan`) is closed: it ends with a tombstone revision marking deletion.
 
-From the diagram, `key a` has two spans: a dead span covering commitSeq 2–8, and a live span
+From the diagram, `key a` has two spans: a dead span covering commitSeq 2-8, and a live span
 from commitSeq 12 onward. The gap between 8 and 12 is simply the key not existing.
 
 ### KeyTimeline
@@ -117,10 +113,10 @@ A `Record` is the value payload stored at a specific revision. It carries:
 The store maintains a mutable visibility window `[start, end]`:
 
 ```
-  start                       end   next()
-    │                          │      │
-────┴──────────────────────────┴──────┴────→  commitSeq
-    ↑                          ↑      ↑
+  start                         end   next()
+    |                            |      |
+----+----------------------------+------+---->  commitSeq
+    ^                            ^      ^
  compaction               last commit  in-progress commit
  boundary
 ```
@@ -129,7 +125,6 @@ The store maintains a mutable visibility window `[start, end]`:
 - `end` - the last committed `commitSeq`; all revisions at or below this are visible.
 - `next()` = `end + 1` - the `commitSeq` the active writer uses for its mutations.
 
----
 
 ## Data model
 
@@ -138,23 +133,22 @@ an encoded `Record`. The `KeyTimelineIndex` holds a `KeyTimeline` per key in an 
 B+ tree; the backend holds the actual record bytes. Together they form the full MVCC store.
 
 ```
- Backend (persistent)                    KeyTimelineIndex (in-memory B+ tree)
- ┌─────────────────────────────────┐     ┌──────────────────────────────────────────┐
- │  Revision(2,0) → Record(key-a)  │     │  key-a → KeyTimeline                     │
- │  Revision(4,0) → Record(key-b)  │     │             dead[0]: cs 2..8             │
- │  Revision(6,0) → Record(key-a)  │     │             live:    cs 12..             │
- │  Revision(8,0) → Record(key-a)  │     │  key-b → KeyTimeline                     │
- │  ...                            │     │             dead[0]: cs 4..12            │
- └─────────────────────────────────┘     │  key-c → KeyTimeline                     │
-                                         │             live:    cs 6..              │
-                                         └──────────────────────────────────────────┘
+ Backend (persistent)                     KeyTimelineIndex (in-memory CoW B+ tree)
+ +----------------------------------+     +------------------------------------------+
+ |  Revision(2,0) -> Record(key-a)  |     |  key-a -> KeyTimeline                    |
+ |  Revision(4,0) -> Record(key-b)  |     |             dead[0]: cs 2..8             |
+ |  Revision(6,0) -> Record(key-a)  |     |             live:    cs 12..             |
+ |  Revision(8,0) -> Record(key-a)  |     |  key-b -> KeyTimeline                    |
+ |  ...                             |     |             dead[0]: cs 4..12            |
+ +----------------------------------+     |  key-c -> KeyTimeline                    |
+                                          |             live:    cs 6..              |
+                                          +------------------------------------------+
 ```
 
 A read at `commitSeq=7` for `key-a` consults the index: the timeline shows a live span
 starting at 2, with the floor revision at or below 7 being `Revision(6,0)`. The backend
 record at `Revision(6,0)` is returned.
 
----
 
 ## Write path
 
@@ -163,18 +157,18 @@ transaction that accumulates multiple logical commits before being flushed.
 
 ```
   writer()
-    │
-    ▼
+    |
+    v
  SessionWriter.put(key, val)
-    │  1. assign Revision(next(), ordinal++)
-    │  2. add to KeyTimelineIndex via TimelineTxn
-    │  3. stage RevisionRecord into RevisionRecordBuffer
-    │  4. put encoded record into backend WriteTxn
-    ▼
- Writer.close()  ← logical commit
-    │  1. publish buffer (records visible to readers)
-    │  2. commit TimelineTxn (index visible to readers)
-    │  3. advance CommitSeqBound.end (readers now see this commitSeq)
+    |  1. assign Revision(next(), ordinal++)
+    |  2. add to KeyTimelineIndex via TimelineTxn
+    |  3. stage RevisionRecord into RevisionRecordBuffer
+    |  4. put encoded record into backend WriteTxn
+    v
+ Writer.close()  <- logical commit
+    |  1. publish buffer (records visible to readers)
+    |  2. commit TimelineTxn (index visible to readers)
+    |  3. advance CommitSeqBound.end (readers now see this commitSeq)
 ```
 
 A logical commit (`Writer.close()`) makes writes visible to new readers immediately - no
@@ -188,7 +182,6 @@ the backend transaction has not yet been flushed, records written in the current
 exist in the buffer. Readers resolve records from the buffer first; if not found there, they
 fall back to a backend read transaction.
 
----
 
 ## Read path
 
@@ -196,22 +189,21 @@ fall back to a backend read transaction.
 
 ```
   reader()
-    │  1. open backend ReadTxn  (snapshot of what is persisted)
-    │  2. take KeyTimelineIndex view  (snapshot of the in-memory index)
-    │  3. capture current buffer reference  (volatile read)
-    │  4. read CommitSeqBound.end  (volatile read - the visible commit horizon)
-    ▼
+    |  1. open backend ReadTxn  (snapshot of what is persisted)
+    |  2. take KeyTimelineIndex view  (snapshot of the in-memory index)
+    |  3. capture current buffer reference  (volatile read)
+    |  4. read CommitSeqBound.end  (volatile read - the visible commit horizon)
+    v
  CommitBoundedReader.get(key, commitSeq)
-    │  1. query index view for the revision at commitSeq
-    │  2. look up record in buffer first
-    │  3. fall back to backend ReadTxn if not in buffer
+    |  1. query index view for the revision at commitSeq
+    |  2. look up record in buffer first
+    |  3. fall back to backend ReadTxn if not in buffer
 ```
 
 Because `CommitSeqBound.end` is `volatile`, the reader sees exactly the state at the moment
 it was created. Readers created after a `Writer.close()` always see the new commit; readers
 created before it always see the old state. No synchronization is needed beyond the volatile read.
 
----
 
 ## Concurrency model
 
@@ -238,7 +230,6 @@ writes to establish happens-before without synchronization:
 A reader that observes `end = N` is guaranteed to see all mutations at or below `N` in both
 the buffer and the index.
 
----
 
 ## Compaction
 
@@ -248,7 +239,6 @@ strictly below the boundary return `SnapshotResult.Compacted`.
 Physical deletion is deferred: a `BatchCompactor` removes one batch of backend records per
 `commit()`, draining the backlog incrementally to keep write latency flat.
 
----
 
 ## Recovery
 
@@ -257,7 +247,7 @@ the backend in order, rebuilding the `KeyTimelineIndex` and recovering `CommitSe
 
 An optional `BiConsumer<Revision, Record>` observer is called once per revision record during
 this replay, in revision order. This allows callers to reconstruct derived state (such as
-lease–key attachments) in a single pass through the backend without a second scan.
+lease-key attachments) in a single pass through the backend without a second scan.
 
 ```
 TimelineVersionedStore.restore(backend, config, (revision, record) -> {
@@ -269,25 +259,24 @@ If a compaction batch was in progress at the time of the last shutdown, it is re
 the first write session opens, using the persisted `completedCompactionCommitSeq` marker to
 distinguish a completed batch from one still in progress.
 
----
 
 ## Module structure
 
 ```
 mvcc/
-├── store/    - public surface: VersionedStore, Reader, Writer interfaces
-│               and TimelineVersionedStore, the primary implementation
-│
-├── model/    - core domain types: Revision, Record, CommitSeqBound,
-│               SnapshotResult, CompactResult, pagination/sort options
-│
-├── timeline/ - per-key revision history: KeyTimeline, LiveSpan, DeadSpan,
-│               KeyTimelineIndex (B+ tree), and transactional index access
-│
-├── io/       - I/O layer: SessionWriter, CommitBoundedReader,
-│               RevisionRecordBuffer, BatchCompactor
-│
-├── codec/    - encoding/decoding Revision and Record to/from backend bytes
-│
-└── internal/ - utility and concurrency primitives used by the timeline layer
++-- store/    - public surface: VersionedStore, Reader, Writer interfaces
+|               and TimelineVersionedStore, the primary implementation
+|
++-- model/    - core domain types: Revision, Record, CommitSeqBound,
+|               SnapshotResult, CompactResult, pagination/sort options
+|
++-- timeline/ - per-key revision history: KeyTimeline, LiveSpan, DeadSpan,
+|               KeyTimelineIndex (B+ tree), and transactional index access
+|
++-- io/       - I/O layer: SessionWriter, CommitBoundedReader,
+|               RevisionRecordBuffer, BatchCompactor
+|
++-- codec/    - encoding/decoding Revision and Record to/from backend bytes
+|
++-- internal/ - low-level concurrency primitives used by the timeline layer
 ```
