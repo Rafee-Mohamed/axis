@@ -6,11 +6,13 @@ import io.disys.axis.backend.WriteHandle;
 import io.disys.axis.lease.codec.LeaseDataDecoder;
 import io.disys.axis.lease.codec.LeaseDataEncoder;
 import io.disys.axis.lease.model.*;
+import io.disys.axis.mvcc.model.Revision;
+import io.disys.axis.mvcc.model.Record;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
-import java.util.random.RandomGenerator;
+import java.util.function.BiConsumer;
 
 public class LeaseStore {
     private final Clock clock;
@@ -43,7 +45,7 @@ public class LeaseStore {
         this.db = db;
     }
 
-    public static LeaseStoreState restoreState(Backend backend, LeaseStoreConfig config, Clock clock) {
+    public static LeaseStore restore(Backend backend, LeaseStoreConfig config, Clock clock) {
         var db = Database.of(config.leaseDb());
         var encoder = new LeaseDataEncoder();
         var decoder = new LeaseDataDecoder();
@@ -55,34 +57,20 @@ public class LeaseStore {
             bh.consumeLeases(txn, (id, record) -> leases.put(id, Lease.restore(id, record, clock)));
         }
 
-        return new LeaseStoreState(clock, leases, bh, config);
-    }
-
-    static LeaseStore from(LeaseStoreState state) {
         var leaseItems = new HashMap<LeaseItem, Long>();
-        var scheduler = new Scheduler(state.clock, state.config);
-
-        for (var lease: state.leases.values()) {
-            scheduler.schedule(lease);
-            for (var item: lease.items()) {
-                leaseItems.put(item, lease.id());
-            }
-        }
-
-        var encoder = new LeaseDataEncoder();
-        var decoder = new LeaseDataDecoder();
 
         return new LeaseStore(
-                state.clock,
-                state.leases,
+                clock,
+                leases,
                 leaseItems,
-                Optional.of(scheduler),
-                state.config,
+                Optional.empty(),
+                config,
                 encoder,
                 decoder,
-                Database.of(state.config.leaseDb())
+                Database.of(config.leaseDb())
         );
     }
+
 
     public GrantResult grant(WriteHandle wh, long id, long ttl) {
         if (leases.containsKey(id)) {
@@ -163,31 +151,64 @@ public class LeaseStore {
         });
     }
 
-    public KeyAttachResult attach(long id, byte[] key) {
-        var l = leases.computeIfPresent(id, (_, lease) -> {
-            leaseItems.put(lease.attach(key), id);
-            return lease;
-        });
+    public BiConsumer<Revision, Record> keysRecoveryConsumer() {
+        return (_, record) -> {
+            var id = record.tombstone() ? 0L : decoder.decodeLeaseId(record.val());
+            if (id != 0) {
+                attachToLease(id, record.key());
+            } else {
+                // if no lease is attached to the key now - might be because of
+                // tombstone or else no lease (0) attached, then check
+                // if the key is already present for any lease, if so
+                // detach the lease from the key
+                var currentId = leaseItems.get(LeaseItem.of(record.key()));
+                if (currentId != null) {
+                    detachFromLease(currentId, record.key());
+                }
+            }
+        };
+    }
 
-        if (l == null) {
+    public KeyAttachResult attach(long id, byte[] key) {
+        var lease = attachToLease(id, key);
+        if (lease == null) {
             return new KeyAttachResult.LeaseNotFound(id);
         }
 
         return new KeyAttachResult.Attached(id);
     }
 
-    public KeyDetachResult detach(long id, byte[] key) {
-        var l = leases.computeIfPresent(id, (_, lease) -> {
-            leaseItems.remove(lease.detach(key));
+    private Lease attachToLease(long id, byte[] key) {
+        var item = LeaseItem.of(key);
+        var currentId = leaseItems.get(item);
+
+        if (currentId != null && currentId != id) {
+            detachFromLease(currentId, key);
+        }
+
+        return leases.computeIfPresent(id, (_, lease) -> {
+            leaseItems.put(lease.attach(key), id);
             return lease;
         });
+    }
 
-        if (l == null) {
+    public KeyDetachResult detach(long id, byte[] key) {
+        var lease = detachFromLease(id, key);
+
+        if (lease == null) {
             return new KeyDetachResult.LeaseNotFound(id);
         }
 
         return new KeyDetachResult.Detached(id);
     }
+
+    private Lease detachFromLease(long id, byte[] key) {
+        return leases.computeIfPresent(id, (_, lease) -> {
+            leaseItems.remove(lease.detach(key));
+            return lease;
+        });
+    }
+
 
     public void trackSchedules() {
         scheduler = Optional.of(scheduler.orElseGet(() ->

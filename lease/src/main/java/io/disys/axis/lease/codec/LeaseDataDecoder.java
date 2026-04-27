@@ -15,7 +15,7 @@ public class LeaseDataDecoder {
         return ByteBuffer.wrap(key).getLong();
     }
 
-    public long decodeVal(byte[] val) {
+    public long decodeLeaseId(byte[] val) {
         return ByteBuffer.wrap(val, val.length - Long.BYTES, Long.BYTES).getLong();
     }
 }
