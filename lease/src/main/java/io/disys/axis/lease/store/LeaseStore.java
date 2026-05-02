@@ -192,6 +192,14 @@ public class LeaseStore {
         });
     }
 
+    public List<byte[]> leasedKeys(long id) {
+        var lease = leases.get(id);
+        if (lease == null) {
+            return List.of();
+        }
+        return lease.items().stream().map(LeaseItem::key).toList();
+    }
+
     public KeyDetachResult detach(long id, byte[] key) {
         var lease = detachFromLease(id, key);
 
