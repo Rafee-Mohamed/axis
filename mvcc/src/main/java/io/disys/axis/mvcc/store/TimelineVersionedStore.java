@@ -206,7 +206,13 @@ public class TimelineVersionedStore implements VersionedStore {
 
     @Override
     public Reader reader() {
-        return CommitBoundedReader.create(db, index.view(), query, backend.beginRead(), buffer, encoder, decoder, bound);
+        // bound is advanced last in the write path (after buffer.publish and index.commit),
+        // so reading it first guarantees buffer and index have reached at least lastCommitSeq.
+        var lastCommitSeq = bound.end();
+        var bufferView = buffer.view(lastCommitSeq);
+        var tlView = index.view();
+        var readTxn = backend.beginRead();
+        return CommitBoundedReader.create(db, tlView, query, readTxn, bufferView, encoder, decoder, lastCommitSeq);
     }
 
     /** Swaps the shared buffer to a fresh instance; the volatile write is immediately visible to threads calling {@link #reader()}. */

@@ -88,27 +88,25 @@ public class CommitBoundedReader implements Reader {
     }
 
     /**
-     * Creates a reader pinned to {@code bound.end()} as {@code lastCommitSeq}, reading
-     * {@code firstCommitSeq} from the backend meta and pinning a buffer view at that seq.
+     * Assembles a reader from pre-pinned components, reading {@code firstCommitSeq} from backend meta.
      */
     public static CommitBoundedReader create(
             Db db,
-            TimelineView view,
+            TimelineView tlView,
             TimelineQuery query,
             ReadTxn txn,
-            RevisionRecordBuffer buffer,
+            RevisionRecordBuffer.View bufferView,
             RecordEncoder encoder,
             RecordDecoder decoder,
-            CommitSeqBound bound
+            long lastCommitSeq
     ) {
         var firstCommitSeq = getCommitSeq(txn, db.meta(), db.meta().firstCommitSeqKey());
-        var lastCommitSeq = bound.end();
         return new CommitBoundedReader(
                 db,
-                view,
+                tlView,
                 query,
                 txn,
-                buffer.view(lastCommitSeq),
+                bufferView,
                 encoder,
                 decoder,
                 firstCommitSeq,
