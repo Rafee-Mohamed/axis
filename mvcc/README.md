@@ -189,10 +189,10 @@ fall back to a backend read transaction.
 
 ```
   reader()
-    |  1. open backend ReadTxn  (snapshot of what is persisted)
-    |  2. take KeyTimelineIndex view  (snapshot of the in-memory index)
-    |  3. capture current buffer reference  (volatile read)
-    |  4. read CommitSeqBound.end  (volatile read - the visible commit horizon)
+    |  1. read CommitSeqBound.end -> lastCommitSeq  (volatile read - the visible commit horizon)
+    |  2. pin buffer view at lastCommitSeq
+    |  3. take KeyTimelineIndex view  (snapshot of the in-memory index)
+    |  4. open backend ReadTxn  (snapshot of what is persisted)
     v
  CommitBoundedReader.get(key, commitSeq)
     |  1. query index view for the revision at commitSeq
@@ -200,9 +200,10 @@ fall back to a backend read transaction.
     |  3. fall back to backend ReadTxn if not in buffer
 ```
 
-Because `CommitSeqBound.end` is `volatile`, the reader sees exactly the state at the moment
-it was created. Readers created after a `Writer.close()` always see the new commit; readers
-created before it always see the old state. No synchronization is needed beyond the volatile read.
+`CommitSeqBound.end` is read first because the write path advances it last (after
+`buffer.publish` and `index.commit`). Reading it first guarantees that the buffer and index
+pinned in steps 2 and 3 have already reached `lastCommitSeq`. Reversing the order would allow
+a reader to observe a `lastCommitSeq` higher than what the just-snapshotted index contains.
 
 
 ## Concurrency model
