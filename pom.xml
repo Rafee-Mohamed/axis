@@ -17,6 +17,7 @@
         <module>backend-lmdb</module>
         <module>wal</module>
         <module>lease</module>
+        <module>axisctl</module>
     </modules>
 
     <properties>

@@ -1,0 +1,15 @@
+jar: ../../server/target/server-0.1.0-SNAPSHOT.jar
+cluster-id: 1
+nodes:
+  - id: 1
+    client-port: 2379
+    peer-port: 2380
+    data-dir: ~/.axis/node-1
+  - id: 2
+    client-port: 2479
+    peer-port: 2480
+    data-dir: ~/.axis/node-2
+  - id: 3
+    client-port: 2579
+    peer-port: 2580
+    data-dir: ~/.axis/node-3
