@@ -77,6 +77,8 @@ public class LeaseStore {
             return new GrantResult.LeaseAlreadyExists(id);
         }
         var lease = Lease.start(id, ttl, clock);
+        leases.put(id, lease);
+        scheduler.ifPresent(s -> s.schedule(lease));
         wh.put(db, encoder.encodeKey(id), encoder.encodeRecord(lease.ttl(), lease.remainingTtl()));
         return new GrantResult.LeaseGranted(id);
     }
