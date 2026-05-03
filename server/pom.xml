@@ -11,6 +11,43 @@
 
     <artifactId>server</artifactId>
 
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>io.disys.axis.server.Main</mainClass>
+                                </transformer>
+                                <!-- merges META-INF/services — required for gRPC provider loading -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
     <dependencies>
         <!-- Client-facing gRPC service definitions -->
         <dependency>
@@ -38,6 +75,20 @@
             <groupId>io.disys</groupId>
             <artifactId>lease</artifactId>
             <version>${project.version}</version>
+        </dependency>
+
+        <!-- LMDB backend - needed for AxisServer startup wiring -->
+        <dependency>
+            <groupId>io.disys</groupId>
+            <artifactId>backend-lmdb</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- YAML config file parsing -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>2.3</version>
         </dependency>
 
         <!-- gRPC Netty transport - needed to bind the server port -->

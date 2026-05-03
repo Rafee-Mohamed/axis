@@ -1,0 +1,43 @@
+lmdb:
+  map-size: 10737418240   # 10 GB
+
+wal:
+  segment-size: 67108864  # 64 MB
+
+# Tick is the base clock for all Raft timers. Every timeout below is expressed
+# in ticks. Real duration = tick-interval × tick-count.
+tick-interval: "PT0.01S"  # 10ms per tick
+
+raft:
+  # How long a follower waits without a heartbeat before starting an election.
+  # Base timeout = election-timeout × tick-interval = 100 × 10ms = 1000ms.
+  # Actual timeout is randomized between 1× and 2× this base (1000ms–1900ms).
+  # Must be at least 5× heartbeat-timeout. Default matches etcd (1000ms).
+  election-timeout: 100
+
+  # How often the leader sends heartbeats to followers.
+  # heartbeat-timeout × tick-interval = 10 × 10ms = 100ms.
+  # Must be significantly less than election-timeout. Default matches etcd (100ms).
+  heartbeat-timeout: 10
+
+  max-inflight-msgs: 256
+  max-applying-entries-size: 67108864  # 64 MB
+
+node:
+  shutdown-timeout: "PT10S"
+  work-termination-timeout: "PT5S"
+
+mvcc:
+  max-buffer: 1024
+  buffer-sync-timeout: "PT5S"
+  delete-batch-size: 256
+  index-max-keys: 64
+
+lease:
+  min-ttl: 1
+  revoke-rate: 1000
+  checkpoint-batch-size: 1000
+  checkpoint-batch-rate: 1000
+  checkpoint-interval: "PT5M"
+  min-wait-time: "PT0.5S"
+  extend-on-schedule-track: "PT2S"
