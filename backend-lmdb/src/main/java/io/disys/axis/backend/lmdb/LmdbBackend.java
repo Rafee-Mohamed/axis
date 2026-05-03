@@ -4,7 +4,6 @@ import io.disys.axis.backend.*;
 import org.lmdbjava.Dbi;
 import org.lmdbjava.DbiFlags;
 import org.lmdbjava.Env;
-import org.lmdbjava.Txn;
 
 import java.nio.ByteBuffer;
 import java.util.HashMap;
@@ -12,7 +11,7 @@ import java.util.Map;
 
 public class LmdbBackend implements Backend {
     private final Env<ByteBuffer> env;
-    private final Map<Database, Dbi<ByteBuffer>> dbs;
+    private final Map<String, Dbi<ByteBuffer>> dbs;
     private final LmdbConfig config;
 
     public LmdbBackend(LmdbConfig config) {
@@ -26,12 +25,8 @@ public class LmdbBackend implements Backend {
 
         this.dbs = new HashMap<>();
 
-        try (Txn<ByteBuffer> txn = env.txnWrite()) {
-            for (var db: config.databases()) {
-                var dbi = env.openDbi(db.name(), DbiFlags.MDB_CREATE);
-                dbs.put(db, dbi);
-            }
-            txn.commit();
+        for (var db : config.databases()) {
+            dbs.put(db.name(), env.openDbi(db.name(), DbiFlags.MDB_CREATE));
         }
 
         this.config = config;

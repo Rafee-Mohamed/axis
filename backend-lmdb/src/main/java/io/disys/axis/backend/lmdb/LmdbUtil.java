@@ -10,4 +10,8 @@ public class LmdbUtil {
         buf.get(copy);
         return copy;
     }
+
+    static ByteBuffer direct(byte[] bytes) {
+        return ByteBuffer.allocateDirect(bytes.length).put(bytes).flip();
+    }
 }

@@ -14,16 +14,16 @@ import java.util.Optional;
 
 final class LmdbReadTxn implements ReadTxn {
     private final Txn<ByteBuffer> txn;
-    private final Map<Database, Dbi<ByteBuffer>> dbs;
+    private final Map<String, Dbi<ByteBuffer>> dbs;
 
-    LmdbReadTxn(Txn<ByteBuffer> txn, Map<Database, Dbi<ByteBuffer>> dbs) {
+    LmdbReadTxn(Txn<ByteBuffer> txn, Map<String, Dbi<ByteBuffer>> dbs) {
         this.txn = txn;
         this.dbs = dbs;
     }
 
     @Override
     public Optional<byte[]> get(Database db, byte[] key) {
-        var val = dbs.get(db).get(txn, ByteBuffer.wrap(key));
+        var val = dbs.get(db.name()).get(txn, LmdbUtil.direct(key));
         if (val == null) return Optional.empty();
         return Optional.of(LmdbUtil.toBytes(val));
     }
@@ -31,16 +31,16 @@ final class LmdbReadTxn implements ReadTxn {
     @Override
     public CloseableIterator<KeyVal> range(Database db, byte[] start, byte[] end) {
         return new LmdbClosableIterator(
-                dbs.get(db).iterate(
+                dbs.get(db.name()).iterate(
                         txn,
-                        KeyRange.closed(ByteBuffer.wrap(start), ByteBuffer.wrap(end))
+                        KeyRange.closed(LmdbUtil.direct(start), LmdbUtil.direct(end))
                 )
         );
     }
 
     @Override
     public CloseableIterator<KeyVal> range(Database db) {
-        return new LmdbClosableIterator(dbs.get(db).iterate(txn));
+        return new LmdbClosableIterator(dbs.get(db.name()).iterate(txn));
     }
 
     @Override

@@ -14,26 +14,26 @@ import java.util.Optional;
 
 final class LmdbWriteTxn implements WriteTxn {
     private final Txn<ByteBuffer> txn;
-    private final Map<Database, Dbi<ByteBuffer>> dbs;
+    private final Map<String, Dbi<ByteBuffer>> dbs;
 
-    LmdbWriteTxn(Txn<ByteBuffer> txn, Map<Database, Dbi<ByteBuffer>> dbs) {
+    LmdbWriteTxn(Txn<ByteBuffer> txn, Map<String, Dbi<ByteBuffer>> dbs) {
         this.txn = txn;
         this.dbs = dbs;
     }
 
     @Override
     public void put(Database db, byte[] key, byte[] value) {
-        dbs.get(db).put(txn, ByteBuffer.wrap(key), ByteBuffer.wrap(value));
+        dbs.get(db.name()).put(txn, LmdbUtil.direct(key), LmdbUtil.direct(value));
     }
 
     @Override
     public void delete(Database db, byte[] key) {
-        dbs.get(db).delete(txn, ByteBuffer.wrap(key));
+        dbs.get(db.name()).delete(txn, LmdbUtil.direct(key));
     }
 
     @Override
     public Optional<byte[]> get(Database db, byte[] key) {
-        var val = dbs.get(db).get(txn, ByteBuffer.wrap(key));
+        var val = dbs.get(db.name()).get(txn, LmdbUtil.direct(key));
         if (val == null) return Optional.empty();
         return Optional.of(LmdbUtil.toBytes(val));
     }
@@ -41,16 +41,16 @@ final class LmdbWriteTxn implements WriteTxn {
     @Override
     public CloseableIterator<KeyVal> range(Database db, byte[] start, byte[] end) {
         return new LmdbClosableIterator(
-                dbs.get(db).iterate(
+                dbs.get(db.name()).iterate(
                         txn,
-                        KeyRange.closed(ByteBuffer.wrap(start), ByteBuffer.wrap(end))
+                        KeyRange.closed(LmdbUtil.direct(start), LmdbUtil.direct(end))
                 )
         );
     }
 
     @Override
     public CloseableIterator<KeyVal> range(Database db) {
-        return new LmdbClosableIterator(dbs.get(db).iterate(txn));
+        return new LmdbClosableIterator(dbs.get(db.name()).iterate(txn));
     }
 
     @Override
