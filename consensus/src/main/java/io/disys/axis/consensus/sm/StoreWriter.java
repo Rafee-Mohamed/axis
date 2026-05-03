@@ -62,51 +62,82 @@ public final class StoreWriter {
         return response.build();
     }
 
-    private PutResponse putWithLease(Writer writer, PutWithLeaseRequest req) {
+    private PutWithLeaseResponse putWithLease(Writer writer, PutWithLeaseRequest req) {
+        if (leaseStore.leaseInfo(req.getLeaseId()).isEmpty()) {
+            return PutWithLeaseResponse.newBuilder()
+                    .setHeader(context.header(writer.revision()))
+                    .setNotFound(LeaseNotFound.newBuilder().setLeaseId(req.getLeaseId()))
+                    .build();
+        }
         var key = req.getKey().toByteArray();
         writer.put(key, KeyValCodec.encode(req.getVal(), req.getLeaseId()).toByteArray());
         leaseStore.attach(req.getLeaseId(), key);
-        return PutResponse.newBuilder()
+        return PutWithLeaseResponse.newBuilder()
                 .setHeader(context.header(writer.revision()))
+                .setOk(PutWithLeaseOk.getDefaultInstance())
                 .build();
     }
 
-    private PutAndGetResponse putWithLeaseAndGet(Writer writer, PutWithLeaseAndGetRequest req) {
+    private PutWithLeaseAndGetResponse putWithLeaseAndGet(Writer writer, PutWithLeaseAndGetRequest req) {
+        if (leaseStore.leaseInfo(req.getLeaseId()).isEmpty()) {
+            return PutWithLeaseAndGetResponse.newBuilder()
+                    .setHeader(context.header(writer.revision()))
+                    .setNotFound(LeaseNotFound.newBuilder().setLeaseId(req.getLeaseId()))
+                    .build();
+        }
         var key = req.getKey().toByteArray();
         var prev = writer.putAndGet(key, KeyValCodec.encode(req.getVal(), req.getLeaseId()).toByteArray());
         leaseStore.attach(req.getLeaseId(), key);
-        var response = PutAndGetResponse.newBuilder()
-                .setHeader(context.header(writer.revision()));
-        prev.ifPresent(r -> response.setPrevKv(KeyValCodec.toKeyVal(r)));
-        return response.build();
-    }
-
-    private PutResponse updateLease(Writer writer, UpdateLeaseRequest req) {
-        var key = req.getKey().toByteArray();
-        var current = writer.get(key);
-        if (current.isPresent()) {
-            var raw = current.get().val();
-            var oldLeaseId = KeyValCodec.decodeLeaseId(raw);
-            if (oldLeaseId != 0) {
-                leaseStore.detach(oldLeaseId, key);
-            }
-            writer.put(key, KeyValCodec.encode(KeyValCodec.decodeVal(raw), req.getLeaseId()).toByteArray());
-            leaseStore.attach(req.getLeaseId(), key);
-        }
-        return PutResponse.newBuilder()
+        var ok = PutWithLeaseAndGetOk.newBuilder();
+        prev.ifPresent(r -> ok.setPrevKv(KeyValCodec.toKeyVal(r)));
+        return PutWithLeaseAndGetResponse.newBuilder()
                 .setHeader(context.header(writer.revision()))
+                .setOk(ok)
                 .build();
     }
 
-    private PutResponse updateValue(Writer writer, UpdateValueRequest req) {
+    private UpdateLeaseResponse updateLease(Writer writer, UpdateLeaseRequest req) {
         var key = req.getKey().toByteArray();
         var current = writer.get(key);
-        if (current.isPresent()) {
-            var currentLeaseId = KeyValCodec.decodeLeaseId(current.get().val());
-            writer.put(key, KeyValCodec.encode(req.getVal(), currentLeaseId).toByteArray());
+        if (current.isEmpty()) {
+            return UpdateLeaseResponse.newBuilder()
+                    .setHeader(context.header(writer.revision()))
+                    .setKeyNotFound(KeyNotFound.newBuilder().setKey(req.getKey()))
+                    .build();
         }
-        return PutResponse.newBuilder()
+        if (leaseStore.leaseInfo(req.getLeaseId()).isEmpty()) {
+            return UpdateLeaseResponse.newBuilder()
+                    .setHeader(context.header(writer.revision()))
+                    .setLeaseNotFound(LeaseNotFound.newBuilder().setLeaseId(req.getLeaseId()))
+                    .build();
+        }
+        var raw = current.get().val();
+        var oldLeaseId = KeyValCodec.decodeLeaseId(raw);
+        if (oldLeaseId != 0) {
+            leaseStore.detach(oldLeaseId, key);
+        }
+        writer.put(key, KeyValCodec.encode(KeyValCodec.decodeVal(raw), req.getLeaseId()).toByteArray());
+        leaseStore.attach(req.getLeaseId(), key);
+        return UpdateLeaseResponse.newBuilder()
                 .setHeader(context.header(writer.revision()))
+                .setOk(UpdateLeaseOk.getDefaultInstance())
+                .build();
+    }
+
+    private UpdateValueResponse updateValue(Writer writer, UpdateValueRequest req) {
+        var key = req.getKey().toByteArray();
+        var current = writer.get(key);
+        if (current.isEmpty()) {
+            return UpdateValueResponse.newBuilder()
+                    .setHeader(context.header(writer.revision()))
+                    .setKeyNotFound(KeyNotFound.newBuilder().setKey(req.getKey()))
+                    .build();
+        }
+        var currentLeaseId = KeyValCodec.decodeLeaseId(current.get().val());
+        writer.put(key, KeyValCodec.encode(req.getVal(), currentLeaseId).toByteArray());
+        return UpdateValueResponse.newBuilder()
+                .setHeader(context.header(writer.revision()))
+                .setOk(UpdateValueOk.getDefaultInstance())
                 .build();
     }
 
@@ -180,12 +211,16 @@ public final class StoreWriter {
             case COUNT -> TxnOpResult.newBuilder().setCount(storeReader.count(writer, op.getCount())).build();
             case COUNT_AT -> TxnOpResult.newBuilder().setCountAt(storeReader.countAt(writer, op.getCountAt())).build();
             case PUT -> TxnOpResult.newBuilder().setPut(put(writer, op.getPut())).build();
-            case PUT_WITH_LEASE -> TxnOpResult.newBuilder().setPut(putWithLease(writer, op.getPutWithLease())).build();
-            case UPDATE_LEASE -> TxnOpResult.newBuilder().setPut(updateLease(writer, op.getUpdateLease())).build();
-            case UPDATE_VALUE -> TxnOpResult.newBuilder().setPut(updateValue(writer, op.getUpdateValue())).build();
+            case PUT_AND_GET -> TxnOpResult.newBuilder().setPutAndGet(putAndGet(writer, op.getPutAndGet())).build();
+            case PUT_WITH_LEASE -> TxnOpResult.newBuilder().setPutWithLease(putWithLease(writer, op.getPutWithLease())).build();
+            case PUT_WITH_LEASE_AND_GET -> TxnOpResult.newBuilder().setPutWithLeaseAndGet(putWithLeaseAndGet(writer, op.getPutWithLeaseAndGet())).build();
+            case UPDATE_LEASE -> TxnOpResult.newBuilder().setUpdateLease(updateLease(writer, op.getUpdateLease())).build();
+            case UPDATE_VALUE -> TxnOpResult.newBuilder().setUpdateValue(updateValue(writer, op.getUpdateValue())).build();
             case REMOVE_LEASE -> TxnOpResult.newBuilder().setPut(removeLease(writer, op.getRemoveLease())).build();
             case DELETE -> TxnOpResult.newBuilder().setDelete(delete(writer, op.getDelete())).build();
+            case DELETE_AND_GET -> TxnOpResult.newBuilder().setDeleteAndGet(deleteAndGet(writer, op.getDeleteAndGet())).build();
             case DELETE_RANGE -> TxnOpResult.newBuilder().setDeleteRange(deleteRange(writer, op.getDeleteRange())).build();
+            case DELETE_RANGE_AND_GET -> TxnOpResult.newBuilder().setDeleteRangeAndGet(deleteRangeAndGet(writer, op.getDeleteRangeAndGet())).build();
             case TXN -> TxnOpResult.newBuilder().setTxn(txn(writer, op.getTxn())).build();
             default -> TxnOpResult.newBuilder().build();
         };

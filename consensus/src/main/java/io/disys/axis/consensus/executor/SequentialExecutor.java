@@ -368,19 +368,19 @@ public final class SequentialExecutor {
         return propose(nextCommand().setPutAndGet(request).build());
     }
 
-    public CompletableFuture<PutResponse> putWithLease(PutWithLeaseRequest request) throws InterruptedException {
+    public CompletableFuture<PutWithLeaseResponse> putWithLease(PutWithLeaseRequest request) throws InterruptedException {
         return propose(nextCommand().setPutWithLease(request).build());
     }
 
-    public CompletableFuture<PutAndGetResponse> putWithLeaseAndGet(PutWithLeaseAndGetRequest request) throws InterruptedException {
+    public CompletableFuture<PutWithLeaseAndGetResponse> putWithLeaseAndGet(PutWithLeaseAndGetRequest request) throws InterruptedException {
         return propose(nextCommand().setPutWithLeaseAndGet(request).build());
     }
 
-    public CompletableFuture<PutResponse> updateLease(UpdateLeaseRequest request) throws InterruptedException {
+    public CompletableFuture<UpdateLeaseResponse> updateLease(UpdateLeaseRequest request) throws InterruptedException {
         return propose(nextCommand().setUpdateLease(request).build());
     }
 
-    public CompletableFuture<PutResponse> updateValue(UpdateValueRequest request) throws InterruptedException {
+    public CompletableFuture<UpdateValueResponse> updateValue(UpdateValueRequest request) throws InterruptedException {
         return propose(nextCommand().setUpdateValue(request).build());
     }
 

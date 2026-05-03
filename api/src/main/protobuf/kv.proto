@@ -5,6 +5,7 @@ option java_multiple_files = true;
 option java_outer_classname = "KvProto";
 
 import "types.proto";
+import "lease.proto";
 
 service KvService {
     // -- reads --
@@ -23,11 +24,11 @@ service KvService {
     // -- writes --
     rpc Put(PutRequest)                               returns (PutResponse);
     rpc PutAndGet(PutAndGetRequest)                   returns (PutAndGetResponse);
-    rpc PutWithLease(PutWithLeaseRequest)             returns (PutResponse);
-    rpc PutWithLeaseAndGet(PutWithLeaseAndGetRequest) returns (PutAndGetResponse);
+    rpc PutWithLease(PutWithLeaseRequest)             returns (PutWithLeaseResponse);
+    rpc PutWithLeaseAndGet(PutWithLeaseAndGetRequest) returns (PutWithLeaseAndGetResponse);
 
-    rpc UpdateLease(UpdateLeaseRequest) returns (PutResponse);
-    rpc UpdateValue(UpdateValueRequest) returns (PutResponse);
+    rpc UpdateLease(UpdateLeaseRequest) returns (UpdateLeaseResponse);
+    rpc UpdateValue(UpdateValueRequest) returns (UpdateValueResponse);
     rpc RemoveLease(RemoveLeaseRequest) returns (PutResponse);
 
     rpc Delete(DeleteRequest)                        returns (DeleteResponse);
@@ -192,6 +193,44 @@ message PutAndGetResponse {
     KeyVal         prev_kv = 2; // absent if key was new
 }
 
+message PutWithLeaseResponse {
+    ResponseHeader header = 1;
+    oneof result {
+        PutWithLeaseOk ok        = 2;
+        LeaseNotFound  not_found = 3;
+    }
+}
+message PutWithLeaseOk {}
+
+message PutWithLeaseAndGetResponse {
+    ResponseHeader header = 1;
+    oneof result {
+        PutWithLeaseAndGetOk ok        = 2;
+        LeaseNotFound        not_found = 3;
+    }
+}
+message PutWithLeaseAndGetOk { KeyVal prev_kv = 1; }
+
+message UpdateLeaseResponse {
+    ResponseHeader header = 1;
+    oneof result {
+        UpdateLeaseOk ok              = 2;
+        KeyNotFound   key_not_found   = 3;
+        LeaseNotFound lease_not_found = 4;
+    }
+}
+message UpdateLeaseOk {}
+
+message UpdateValueResponse {
+    ResponseHeader header = 1;
+    oneof result {
+        UpdateValueOk ok            = 2;
+        KeyNotFound   key_not_found = 3;
+    }
+}
+message UpdateValueOk {}
+message KeyNotFound { bytes key = 1; }
+
 // ===================== Partial updates =====================
 
 message UpdateLeaseRequest { bytes key = 1; int64 lease_id = 2; }
@@ -277,14 +316,18 @@ message TxnOp {
         CountRequest          count          = 7;
         CountAtRequest        count_at       = 8;
         // writes
-        PutRequest            put            = 9;
-        PutWithLeaseRequest   put_with_lease = 10;
-        UpdateLeaseRequest    update_lease   = 11;
-        UpdateValueRequest    update_value   = 12;
-        RemoveLeaseRequest    remove_lease   = 13;
-        DeleteRequest         delete         = 14;
-        DeleteRangeRequest    delete_range   = 15;
-        TxnRequest            txn            = 16;
+        PutRequest                  put                    = 9;
+        PutAndGetRequest            put_and_get            = 17;
+        PutWithLeaseRequest         put_with_lease         = 10;
+        PutWithLeaseAndGetRequest   put_with_lease_and_get = 18;
+        UpdateLeaseRequest          update_lease           = 11;
+        UpdateValueRequest          update_value           = 12;
+        RemoveLeaseRequest          remove_lease           = 13;
+        DeleteRequest               delete                 = 14;
+        DeleteAndGetRequest         delete_and_get         = 19;
+        DeleteRangeRequest          delete_range           = 15;
+        DeleteRangeAndGetRequest    delete_range_and_get   = 20;
+        TxnRequest                  txn                    = 16;
     }
 }
 
@@ -296,18 +339,25 @@ message TxnResponse {
 
 message TxnOpResult {
     oneof result {
-        GetResponse         get          = 1;
-        GetAtResponse       get_at       = 2;
-        RangeResponse       range        = 3;
-        RangeAtResponse     range_at     = 4;
-        KeysResponse        keys         = 5;
-        KeysAtResponse      keys_at      = 6;
-        CountResponse       count        = 7;
-        CountAtResponse     count_at     = 8;
-        PutResponse         put          = 9;
-        DeleteResponse      delete       = 10;
-        DeleteRangeResponse delete_range = 11;
-        TxnResponse         txn          = 12;
+        GetResponse            get              = 1;
+        GetAtResponse          get_at           = 2;
+        RangeResponse          range            = 3;
+        RangeAtResponse        range_at         = 4;
+        KeysResponse           keys             = 5;
+        KeysAtResponse         keys_at          = 6;
+        CountResponse          count            = 7;
+        CountAtResponse        count_at         = 8;
+        PutResponse                put                    = 9;
+        PutAndGetResponse          put_and_get            = 15;
+        PutWithLeaseResponse       put_with_lease         = 13;
+        PutWithLeaseAndGetResponse put_with_lease_and_get = 16;
+        DeleteResponse             delete                 = 10;
+        DeleteAndGetResponse       delete_and_get         = 17;
+        DeleteRangeResponse        delete_range           = 11;
+        DeleteRangeAndGetResponse  delete_range_and_get   = 18;
+        TxnResponse                txn                    = 12;
+        UpdateLeaseResponse        update_lease           = 14;
+        UpdateValueResponse        update_value           = 19;
     }
 }
 

@@ -70,22 +70,22 @@ final class KvServiceImpl extends KvServiceGrpc.KvServiceImplBase {
     }
 
     @Override
-    public void putWithLease(PutWithLeaseRequest req, StreamObserver<PutResponse> out) {
+    public void putWithLease(PutWithLeaseRequest req, StreamObserver<PutWithLeaseResponse> out) {
         handle(out, () -> executor.putWithLease(req));
     }
 
     @Override
-    public void putWithLeaseAndGet(PutWithLeaseAndGetRequest req, StreamObserver<PutAndGetResponse> out) {
+    public void putWithLeaseAndGet(PutWithLeaseAndGetRequest req, StreamObserver<PutWithLeaseAndGetResponse> out) {
         handle(out, () -> executor.putWithLeaseAndGet(req));
     }
 
     @Override
-    public void updateLease(UpdateLeaseRequest req, StreamObserver<PutResponse> out) {
+    public void updateLease(UpdateLeaseRequest req, StreamObserver<UpdateLeaseResponse> out) {
         handle(out, () -> executor.updateLease(req));
     }
 
     @Override
-    public void updateValue(UpdateValueRequest req, StreamObserver<PutResponse> out) {
+    public void updateValue(UpdateValueRequest req, StreamObserver<UpdateValueResponse> out) {
         handle(out, () -> executor.updateValue(req));
     }
 
