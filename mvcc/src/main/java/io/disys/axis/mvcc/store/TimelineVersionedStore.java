@@ -173,7 +173,7 @@ public class TimelineVersionedStore implements VersionedStore {
         txn.close();
 
         var query = new TimelineQuery();
-        var session = new SessionWriter(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
+        var session = new SessionWriter(config, db, backend.beginWrite(), index::txn, query, buffer, bound, encoder, decoder, compactor);
 
         return new TimelineVersionedStore(backend, config, bound, db, index, query, buffer, session, compactor, encoder, decoder);
     }
@@ -296,7 +296,7 @@ public class TimelineVersionedStore implements VersionedStore {
 
         var txn = backend.beginWrite();
         compactor = BatchCompactor.create(txn, db, config.deleteBatchSize(), retained, decoder);
-        session = new SessionWriter(config, db, txn, index.txn(), query, buffer, bound, encoder, decoder, compactor);
+        session = new SessionWriter(config, db, txn, index::txn, query, buffer, bound, encoder, decoder, compactor);
 
         return new CompactResult.Ok();
     }
@@ -307,7 +307,7 @@ public class TimelineVersionedStore implements VersionedStore {
         // the compactor runs as part of every backend flush.
         session.commit();
         renewBuffer();
-        session = new SessionWriter(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
+        session = new SessionWriter(config, db, backend.beginWrite(), index::txn, query, buffer, bound, encoder, decoder, compactor);
     }
 
     @Override
@@ -321,7 +321,7 @@ public class TimelineVersionedStore implements VersionedStore {
             // backend, any overlap between the old buffer and the backend is harmless -
             // both carry identical data for the same revision.
             renewBuffer();
-            session = new SessionWriter(config, db, backend.beginWrite(), index.txn(), query, buffer, bound, encoder, decoder, compactor);
+            session = new SessionWriter(config, db, backend.beginWrite(), index::txn, query, buffer, bound, encoder, decoder, compactor);
         }
         return session;
     }

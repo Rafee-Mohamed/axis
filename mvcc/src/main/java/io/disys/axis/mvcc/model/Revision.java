@@ -36,13 +36,14 @@ public record Revision(long commitSeq, int ordinal) implements Comparable<Revisi
     }
 
     /**
-     * Compares against {@code Revision(otherCommitSeq, 0)}.
+     * Compares this revision's {@code commitSeq} against {@code otherCommitSeq}.
+     * Ordinal is intentionally excluded: all mutations within a commit are
+     * atomically visible at that commit boundary, regardless of intra-commit ordering.
      *
      * @param otherCommitSeq  the commit sequence to compare against
      * @return per {@link Comparable} contract
      */
     public int compareTo(long otherCommitSeq) {
-        var cmp = Long.compare(commitSeq, otherCommitSeq);
-        return cmp == 0 ? Integer.compare(ordinal, 0) : cmp;
+        return Long.compare(commitSeq, otherCommitSeq);
     }
 }

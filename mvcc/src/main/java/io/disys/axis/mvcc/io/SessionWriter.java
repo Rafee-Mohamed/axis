@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.BiFunction;
+import java.util.function.Supplier;
 
 /**
  * {@link Writer} implementation that accumulates writes within a single logical commitSeq.
@@ -36,8 +37,11 @@ public class SessionWriter implements Writer {
     /** Backend write transaction; accumulates puts/deletes until {@link #commit()} flushes them. */
     private final WriteTxn txn;
 
-    /** In-memory timeline transaction; committed on {@link #close()} to make writes queryable. */
-    private final TimelineTxn tlTxn;
+    /** Vends a fresh {@link TimelineTxn}; called once at construction and again after each logical commit in {@link #close()}. */
+    private final Supplier<TimelineTxn> tlTxnSupplier;
+
+    /** In-memory timeline transaction for the current logical commit; renewed in-place on each {@link #close()}. */
+    private TimelineTxn tlTxn;
 
     private final TimelineQuery query;
 
@@ -68,7 +72,7 @@ public class SessionWriter implements Writer {
             TimelineVersionedStoreConfig config,
             Db db,
             WriteTxn txn,
-            TimelineTxn tlTxn,
+            Supplier<TimelineTxn> tlTxnSupplier,
             TimelineQuery query,
             RevisionRecordBuffer buffer,
             CommitSeqBound bound,
@@ -78,7 +82,8 @@ public class SessionWriter implements Writer {
     ) {
         this.config = config;
         this.txn = txn;
-        this.tlTxn = tlTxn;
+        this.tlTxnSupplier = tlTxnSupplier;
+        this.tlTxn = tlTxnSupplier.get();
         this.query = query;
         this.buffer = buffer;
         this.bound = bound;
@@ -128,7 +133,9 @@ public class SessionWriter implements Writer {
 
     /**
      * Logical commit: publishes staged records to the buffer, commits the timeline
-     * transaction, and advances the committed bound. Has no effect if no writes were staged.
+     * transaction, advances the committed bound, and renews {@code tlTxn} in-place
+     * so the session is ready for the next logical commit without a new backend transaction.
+     * Has no effect if no writes were staged.
      */
     @Override
     public void close() {
@@ -142,6 +149,7 @@ public class SessionWriter implements Writer {
         buffer.publish();
         tlTxn.commit();
         bound.advance();
+        tlTxn = tlTxnSupplier.get();
     }
 
     /**
