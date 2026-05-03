@@ -30,6 +30,9 @@ message Command {
 }
 
 message LeaseCheckpoint {
-    int64 lease_id      = 1;
-    int64 remaining_ttl = 2;
+    message Entry {
+        int64 lease_id      = 1;
+        int64 remaining_ttl = 2;
+    }
+    repeated Entry entries = 1;
 }

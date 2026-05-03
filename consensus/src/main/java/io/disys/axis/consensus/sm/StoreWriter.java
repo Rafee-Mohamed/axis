@@ -283,6 +283,8 @@ public final class StoreWriter {
     }
 
     private void leaseCheckpoint(LeaseCheckpoint req) {
-        leaseStore.checkpoint(req.getLeaseId(), req.getRemainingTtl());
+        for (var entry : req.getEntriesList()) {
+            leaseStore.checkpoint(entry.getLeaseId(), entry.getRemainingTtl());
+        }
     }
 }

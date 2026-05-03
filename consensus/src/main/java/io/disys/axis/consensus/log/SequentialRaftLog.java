@@ -189,8 +189,6 @@ public final class SequentialRaftLog implements LogStorage {
         } catch (StorageException e) {
             throw new IOException("Failed to apply persist task to in-memory log", e);
         }
-
-        task.complete();
     }
 
     // ===================== Compact (apply loop) ================================

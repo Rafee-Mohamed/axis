@@ -31,7 +31,7 @@ public final class PeerConnection {
     }
 
     public void connect() {
-        var stub = RaftTransportServiceGrpc.newStub(channel);
+        var stub = RaftTransportServiceGrpc.newStub(channel).withWaitForReady();
         sender = stub.stream(new StreamObserver<>() {
 
             @Override
@@ -54,7 +54,13 @@ public final class PeerConnection {
 
     public void send(PeerMessage msg) {
         StreamObserver<PeerMessage> s = sender;
-        if (s == null) return;
+        if (s == null) {
+            connect();
+            s = sender;
+            if (s == null) {
+                return;
+            }
+        }
         try {
             s.onNext(msg);
         } catch (Exception e) {

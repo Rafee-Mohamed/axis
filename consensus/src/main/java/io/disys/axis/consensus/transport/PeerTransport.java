@@ -16,8 +16,10 @@ public final class PeerTransport {
 
     private final Server server;
     private final Map<NodeId, PeerConnection> connections;
+    private final Consumer<Message.Peer> receiver;
 
     public PeerTransport(int localPort, Map<NodeId, InetSocketAddress> peers, Consumer<Message.Peer> receiver) {
+        this.receiver = receiver;
         this.server = ServerBuilder.forPort(localPort)
                 .addService(new RaftTransportService(receiver))
                 .build();
@@ -41,7 +43,10 @@ public final class PeerTransport {
 
     public void send(Message.Peer message) {
         var conn = connections.get(extractTo(message));
-        if (conn == null) return;
+        if (conn == null) {
+            receiver.accept(message);
+            return;
+        }
         conn.send(PeerMessageCodec.encode(message));
     }
 
