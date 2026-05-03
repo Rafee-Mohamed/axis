@@ -41,8 +41,8 @@ public class ClusterManager {
 
             var cmd = buildCommand(node, allVoters, peers);
             var dataPath = Path.of(node.dataDir());
-            var logFile = dataPath.getParent().resolve("node-" + node.id() + ".log");
-            Files.createDirectories(dataPath.getParent());
+            var logFile = dataPath.resolve("server.log");
+            Files.createDirectories(dataPath);
 
             var pb = new ProcessBuilder(cmd)
                     .redirectErrorStream(true)

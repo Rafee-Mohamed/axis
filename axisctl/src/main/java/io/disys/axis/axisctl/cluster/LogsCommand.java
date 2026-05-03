@@ -42,7 +42,7 @@ public class LogsCommand implements Runnable {
                     .filter(n -> nodeId == 0 || n.id() == nodeId)
                     .map(n -> (Map.Entry<String, Path>) new AbstractMap.SimpleEntry<>(
                             "node-" + n.id(),
-                            Path.of(n.dataDir()).getParent().resolve("node-" + n.id() + ".log")))
+                            Path.of(n.dataDir()).resolve("server.log")))
                     .toList();
 
             if (follow) {
