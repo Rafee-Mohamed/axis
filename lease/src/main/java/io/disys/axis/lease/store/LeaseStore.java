@@ -227,7 +227,7 @@ public class LeaseStore {
         scheduler = Optional.empty();
     }
 
-    private Optional<Duration> nextSchedule() {
+    public Optional<Duration> nextSchedule() {
         return scheduler
                 .flatMap(Scheduler::nextSchedule)
                 .map(next -> {
@@ -239,12 +239,25 @@ public class LeaseStore {
                 });
     }
 
-    private List<Long> expired() {
+    public List<Long> expired() {
         return scheduler.map(s -> s.expired(leases)).orElseGet(List::of);
     }
 
-    private List<List<Checkpoint>> checkpoints() {
+    public List<List<Checkpoint>> checkpoints() {
         return scheduler.map(s -> s.checkpoints(leases)).orElseGet(List::of);
+    }
+
+    public Optional<LeaseInfo> leaseInfo(long id) {
+        var lease = leases.get(id);
+        if (lease == null) return Optional.empty();
+        var keys = lease.items().stream().map(LeaseItem::key).toList();
+        return Optional.of(new LeaseInfo(lease.id(), lease.ttl(), lease.remainingTtl(), keys));
+    }
+
+    public List<LeaseInfo> leaseList() {
+        return leases.values().stream()
+                .map(l -> new LeaseInfo(l.id(), l.ttl(), l.remainingTtl(), List.of()))
+                .toList();
     }
 
 }
