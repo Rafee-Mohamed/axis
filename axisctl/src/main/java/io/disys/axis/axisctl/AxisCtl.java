@@ -6,6 +6,8 @@ import io.disys.axis.axisctl.lease.LeaseCommand;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 
+import java.io.IOException;
+
 @Command(
         name = "axisctl",
         mixinStandardHelpOptions = true,
@@ -24,8 +26,12 @@ public class AxisCtl implements Runnable {
         CommandLine.usage(this, System.out);
     }
 
-    public static void main(String[] args) {
-        int exit = new CommandLine(new AxisCtl()).execute(args);
-        System.exit(exit);
+    public static void main(String[] args) throws IOException {
+        var cmd = new CommandLine(new AxisCtl());
+        if (args.length == 0) {
+            Shell.run(cmd);
+        } else {
+            System.exit(cmd.execute(args));
+        }
     }
 }
