@@ -1,6 +1,5 @@
 package io.disys.axis.consensus.executor;
 
-import com.google.protobuf.ByteString;
 import io.disys.axis.api.proto.*;
 import io.disys.axis.consensus.log.SequentialRaftLog;
 import io.disys.axis.consensus.model.RaftPayload;
@@ -24,16 +23,21 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Function;
 
 public final class SequentialExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(SequentialExecutor.class);
     private static final Duration DEFAULT_SCHEDULE_WAIT = Duration.ofSeconds(30);
+    private static final Duration MAX_POLL_INTERVAL = Duration.ofMillis(100);
 
     private final Node<RaftPayload, Long> node;
     private final SequentialRaftLog raftLog;
@@ -52,7 +56,13 @@ public final class SequentialExecutor {
 
     // only accessed from the execution loop thread
     private long appliedIndex;
+    private long commitIndex;
     private volatile Thread tickerThread;
+
+    private final BlockingQueue<Runnable> incomingLeaseReads;
+    private final List<PendingLeaseRead> pendingLeaseReads;
+
+    private record PendingLeaseRead(long expectedCommitIndex, Runnable serve) {}
 
     public SequentialExecutor(
             Node<RaftPayload, Long> node,
@@ -74,6 +84,8 @@ public final class SequentialExecutor {
         this.tickInterval = tickInterval;
         this.memberId = memberId;
         this.responses = new ConcurrentHashMap<>();
+        this.incomingLeaseReads = new LinkedBlockingQueue<>();
+        this.pendingLeaseReads = new ArrayList<>();
         this.volatileState = new VolatileState(RoleType.FOLLOWER, Optional.empty());
         try {
             this.term = raftLog.initialState().persistentState().term();
@@ -128,8 +140,15 @@ public final class SequentialExecutor {
         log.info("execution loop started member={}", memberId);
         try {
             while (true) {
-                var timeout = leaseStore.nextSchedule().orElse(DEFAULT_SCHEDULE_WAIT);
+                // Serve any reads that arrived during the previous iteration before blocking on Raft work.
+                drainLeaseReads();
+                servePendingLeaseReads();
+
+                var leaseTimeout = leaseStore.nextSchedule().orElse(DEFAULT_SCHEDULE_WAIT);
+                var timeout = leaseTimeout.compareTo(MAX_POLL_INTERVAL) > 0 ? MAX_POLL_INTERVAL : leaseTimeout;
                 var item = node.pollWork(timeout);
+
+                drainLeaseReads();
                 if (item.isPresent()) {
                     switch (item.get()) {
                         case WorkItem.Terminated<RaftPayload> _ -> {
@@ -141,6 +160,7 @@ public final class SequentialExecutor {
                 } else if (volatileState.role() == RoleType.LEADER) {
                     processLeaseSchedule();
                 }
+                servePendingLeaseReads();
             }
         } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
@@ -148,6 +168,24 @@ public final class SequentialExecutor {
         } catch (IOException e) {
             log.error("fatal error in execution loop member={}", memberId, e);
         }
+    }
+
+    private void drainLeaseReads() {
+        List<Runnable> incoming = new ArrayList<>();
+        incomingLeaseReads.drainTo(incoming);
+        for (var serve : incoming) {
+            pendingLeaseReads.add(new PendingLeaseRead(commitIndex, serve));
+        }
+    }
+
+    private void servePendingLeaseReads() {
+        pendingLeaseReads.removeIf(r -> {
+            if (appliedIndex >= r.expectedCommitIndex()) {
+                r.serve().run();
+                return true;
+            }
+            return false;
+        });
     }
 
     private void processLeaseSchedule() throws InterruptedException {
@@ -193,6 +231,7 @@ public final class SequentialExecutor {
             boolean termChanged = task.persistentState().isPresent();
             log.debug("persisting entries={} termChanged={} member={}", entryCount, termChanged, memberId);
             raftLog.persist(task);
+            task.checkpointState().ifPresent(cs -> commitIndex = cs.commit());
             var afterPersist = task.messagesAfterPersist();
             if (!afterPersist.isEmpty()) {
                 log.debug("sending post-persist messages count={} member={}", afterPersist.size(), memberId);
@@ -375,38 +414,46 @@ public final class SequentialExecutor {
 
     public CompletableFuture<InfoResponse> leaseInfo(InfoRequest request) throws InterruptedException {
         log.debug("read op=LEASE_INFO leaseId={} member={}", request.getLeaseId(), memberId);
-        return node.readIndex().thenApply(_ ->
-                leaseStore.leaseInfo(request.getLeaseId())
-                        .map(s -> InfoResponse.newBuilder()
-                                .setFound(LeaseDetail.newBuilder()
-                                        .setLeaseId(s.id())
-                                        .setTtl(s.ttl())
-                                        .setRemainingTtl(s.remainingTtl())
-                                        .addAllKeys(s.keys().stream()
-                                                .map(com.google.protobuf.ByteString::copyFrom)
-                                                .toList())
-                                        .build())
+        var future = new CompletableFuture<InfoResponse>();
+        incomingLeaseReads.put(() -> future.complete(buildInfoResponse(request)));
+        return future;
+    }
+
+    private InfoResponse buildInfoResponse(InfoRequest request) {
+        return leaseStore.leaseInfo(request.getLeaseId())
+                .map(s -> InfoResponse.newBuilder()
+                        .setFound(LeaseDetail.newBuilder()
+                                .setLeaseId(s.id())
+                                .setTtl(s.ttl())
+                                .setRemainingTtl(s.remainingTtl())
+                                .addAllKeys(s.keys().stream()
+                                        .map(com.google.protobuf.ByteString::copyFrom)
+                                        .toList())
                                 .build())
-                        .orElseGet(() -> InfoResponse.newBuilder()
-                                .setNotFound(LeaseNotFound.newBuilder()
-                                        .setLeaseId(request.getLeaseId())
-                                        .build())
+                        .build())
+                .orElseGet(() -> InfoResponse.newBuilder()
+                        .setNotFound(LeaseNotFound.newBuilder()
+                                .setLeaseId(request.getLeaseId())
                                 .build())
-        );
+                        .build());
     }
 
     public CompletableFuture<LeasesResponse> leaseList(LeasesRequest request) throws InterruptedException {
         log.debug("read op=LEASE_LIST member={}", memberId);
-        return node.readIndex().thenApply(_ -> {
-            var infos = leaseStore.leaseList().stream()
-                    .map(s -> LeaseInfo.newBuilder()
-                            .setLeaseId(s.id())
-                            .setTtl(s.ttl())
-                            .setRemainingTtl(s.remainingTtl())
-                            .build())
-                    .toList();
-            return LeasesResponse.newBuilder().addAllLeases(infos).build();
-        });
+        var future = new CompletableFuture<LeasesResponse>();
+        incomingLeaseReads.put(() -> future.complete(buildListResponse()));
+        return future;
+    }
+
+    private LeasesResponse buildListResponse() {
+        var infos = leaseStore.leaseList().stream()
+                .map(s -> LeaseInfo.newBuilder()
+                        .setLeaseId(s.id())
+                        .setTtl(s.ttl())
+                        .setRemainingTtl(s.remainingTtl())
+                        .build())
+                .toList();
+        return LeasesResponse.newBuilder().addAllLeases(infos).build();
     }
 
     public CompletableFuture<GrantResponse> leaseGrant(GrantRequest request) throws InterruptedException {
