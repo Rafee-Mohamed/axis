@@ -262,7 +262,7 @@ public class KeyTimeline {
 
     /** @return the most recent {@link KeySpan} in this timeline */
     public KeySpan lastSpan() {
-        return deadSpans.isEmpty() ? liveSpan : deadSpans.getLast();
+        return liveSpan.isEmpty() ? deadSpans.getLast() : liveSpan;
     }
 
     /**

@@ -247,8 +247,9 @@ public class SessionWriter implements Writer {
 
     @Override
     public int deleteRange(byte[] from, byte[] to) {
+        var nextCommitSeq = bound.next();
         var mapper = new BiFunction<byte[], KeyTimeline, Optional<RevisionRecord>>() {
-            Revision revision = new Revision(bound.next(), ordinal);;
+            Revision revision = new Revision(nextCommitSeq, ordinal);;
             @Override
             public Optional<RevisionRecord> apply(byte[] key, KeyTimeline timeline) {
                 if (!timeline.tryComplete(revision)) {
