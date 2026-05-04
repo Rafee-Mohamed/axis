@@ -29,8 +29,8 @@ public class ClusterManager {
                 .collect(Collectors.joining(","));
 
         for (var node : nodes) {
-            if (isRunning(node.id())) {
-                System.out.printf("node %d already running (pid %d)%n", node.id(), readPid(node.id()));
+            if (isRunning(node)) {
+                System.out.printf("node %d already running (pid %d)%n", node.id(), readPid(node));
                 continue;
             }
 
@@ -49,7 +49,7 @@ public class ClusterManager {
                     .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile.toFile()));
 
             var proc = pb.start();
-            writePid(node.id(), proc.pid());
+            writePid(node, proc.pid());
 
             System.out.printf("node %d started (pid %d) — log: %s%n", node.id(), proc.pid(), logFile);
         }
@@ -61,12 +61,12 @@ public class ClusterManager {
                 .toList();
 
         for (var node : nodes) {
-            var pidFile = pidFile(node.id());
+            var pidFile = pidFile(node);
             if (!Files.exists(pidFile)) {
                 System.out.printf("node %d not running (no pid file)%n", node.id());
                 continue;
             }
-            var pid = readPid(node.id());
+            var pid = readPid(node);
             var killed = ProcessHandle.of(pid).map(ph -> {
                 ph.destroy();
                 return true;
@@ -84,14 +84,14 @@ public class ClusterManager {
     public void status() {
         System.out.printf("%-6s  %-20s  %-10s  %s%n", "id", "endpoint", "status", "pid");
         for (var node : config.nodes()) {
-            var pidFile = pidFile(node.id());
+            var pidFile = pidFile(node);
             String status;
             String pidStr;
             if (!Files.exists(pidFile)) {
                 status = "stopped";
                 pidStr = "-";
             } else {
-                var pid = readPid(node.id());
+                var pid = readPid(node);
                 if (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
                     status = "running";
                     pidStr = String.valueOf(pid);
@@ -110,6 +110,8 @@ public class ClusterManager {
         cmd.add("java");
         cmd.add("--add-opens=java.base/java.nio=ALL-UNNAMED");
         cmd.add("--add-opens=java.base/sun.nio.ch=ALL-UNNAMED");
+        cmd.add("--enable-native-access=ALL-UNNAMED");
+        cmd.add("--sun-misc-unsafe-memory-access=allow");
         cmd.add("-jar");
         cmd.add(config.jar());
         cmd.add("--member-id=" + node.id());
@@ -124,26 +126,26 @@ public class ClusterManager {
         return cmd;
     }
 
-    private boolean isRunning(long nodeId) {
-        var pidFile = pidFile(nodeId);
+    private boolean isRunning(ClusterConfig.NodeConfig node) {
+        var pidFile = pidFile(node);
         if (!Files.exists(pidFile)) return false;
-        var pid = readPid(nodeId);
+        var pid = readPid(node);
         return ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);
     }
 
-    private static Path pidFile(long nodeId) {
-        return Path.of("/tmp/axis-" + nodeId + ".pid");
+    private static Path pidFile(ClusterConfig.NodeConfig node) {
+        return Path.of(node.dataDir()).resolve("axis.pid");
     }
 
-    private static long readPid(long nodeId) {
+    private static long readPid(ClusterConfig.NodeConfig node) {
         try {
-            return Long.parseLong(Files.readString(pidFile(nodeId)).strip());
+            return Long.parseLong(Files.readString(pidFile(node)).strip());
         } catch (IOException e) {
             return -1;
         }
     }
 
-    private static void writePid(long nodeId, long pid) throws IOException {
-        Files.writeString(pidFile(nodeId), String.valueOf(pid));
+    private static void writePid(ClusterConfig.NodeConfig node, long pid) throws IOException {
+        Files.writeString(pidFile(node), String.valueOf(pid));
     }
 }
