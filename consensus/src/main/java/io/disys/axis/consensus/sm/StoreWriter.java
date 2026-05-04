@@ -158,7 +158,9 @@ public final class StoreWriter {
     }
 
     private DeleteResponse delete(Writer writer, DeleteRequest req) {
-        var deleted = writer.delete(req.getKey().toByteArray());
+        var key = req.getKey().toByteArray();
+        var deleted = writer.delete(key);
+        if (deleted) leaseStore.detachIfLeased(key);
         return DeleteResponse.newBuilder()
                 .setHeader(context.header(writer.revision()))
                 .setDeleted(deleted)
@@ -166,7 +168,9 @@ public final class StoreWriter {
     }
 
     private DeleteAndGetResponse deleteAndGet(Writer writer, DeleteAndGetRequest req) {
-        var prev = writer.deleteAndGet(req.getKey().toByteArray());
+        var key = req.getKey().toByteArray();
+        var prev = writer.deleteAndGet(key);
+        prev.ifPresent(r -> leaseStore.detachIfLeased(r.key()));
         var response = DeleteAndGetResponse.newBuilder()
                 .setHeader(context.header(writer.revision()));
         prev.ifPresent(r -> response.setPrevKv(KeyValCodec.toKeyVal(r)));
@@ -174,15 +178,17 @@ public final class StoreWriter {
     }
 
     private DeleteRangeResponse deleteRange(Writer writer, DeleteRangeRequest req) {
-        var deleted = writer.deleteRange(req.getFrom().toByteArray(), req.getTo().toByteArray());
+        var prevs = writer.deleteRangeAndGet(req.getFrom().toByteArray(), req.getTo().toByteArray());
+        prevs.forEach(r -> leaseStore.detachIfLeased(r.key()));
         return DeleteRangeResponse.newBuilder()
                 .setHeader(context.header(writer.revision()))
-                .setDeleted(deleted)
+                .setDeleted(prevs.size())
                 .build();
     }
 
     private DeleteRangeAndGetResponse deleteRangeAndGet(Writer writer, DeleteRangeAndGetRequest req) {
         var prevs = writer.deleteRangeAndGet(req.getFrom().toByteArray(), req.getTo().toByteArray());
+        prevs.forEach(r -> leaseStore.detachIfLeased(r.key()));
         return DeleteRangeAndGetResponse.newBuilder()
                 .setHeader(context.header(writer.revision()))
                 .addAllPrevKvs(prevs.stream().map(KeyValCodec::toKeyVal).toList())
@@ -301,7 +307,7 @@ public final class StoreWriter {
 
     private RevokeResponse leaseRevoke(Writer writer, RevokeRequest req) {
         var id = req.getLeaseId();
-        leaseStore.leasedKeys(id).forEach(key -> writer.delete(key));
+        leaseStore.leasedKeys(id).forEach(writer::delete);
         var result = leaseStore.revoke(writer.handle(), id);
         return switch (result) {
             case RevokeResult.LeaseRevoked _ -> RevokeResponse.newBuilder()
