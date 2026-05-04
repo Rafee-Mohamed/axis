@@ -212,6 +212,13 @@ public class LeaseStore {
         return new KeyDetachResult.Detached(id);
     }
 
+    public void detachIfLeased(byte[] key) {
+        var id = leaseItems.get(LeaseItem.of(key));
+        if (id != null) {
+            detachFromLease(id, key);
+        }
+    }
+
     private Lease detachFromLease(long id, byte[] key) {
         return leases.computeIfPresent(id, (_, lease) -> {
             leaseItems.remove(lease.detach(key));
