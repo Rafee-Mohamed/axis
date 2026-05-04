@@ -225,13 +225,13 @@ public class SessionWriter implements Writer {
 
     @Override
     public boolean delete(byte[] key) {
-        var revision = new Revision (bound.next(), ordinal++);
+        var revision = new Revision (bound.next(), ordinal + 1);
         var span = tlTxn.complete(key, revision);
 
         if (span.isEmpty()) {
             return false;
         }
-
+        ordinal++;
         var record = new Record(key, span.get());
         buffer.stage(new RevisionRecord(revision, record));
         txn.put(db.revision(), encoder.encode(revision), encoder.encode(record));
