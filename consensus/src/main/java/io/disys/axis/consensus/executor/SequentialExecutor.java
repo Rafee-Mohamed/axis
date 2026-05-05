@@ -27,10 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.*;
 import java.util.function.Function;
 
 public final class SequentialExecutor {
@@ -61,6 +58,7 @@ public final class SequentialExecutor {
 
     private final BlockingQueue<Runnable> incomingLeaseReads;
     private final List<PendingLeaseRead> pendingLeaseReads;
+    private final Executor readers;
 
     private record PendingLeaseRead(long expectedCommitIndex, Runnable serve) {}
 
@@ -95,6 +93,7 @@ public final class SequentialExecutor {
         var nodeContext = new NodeContext(clusterId, memberId, () -> this.term);
         this.storeReader = new StoreReader(nodeContext);
         this.storeWriter = new StoreWriter(nodeContext, leaseStore, store);
+        this.readers = Executors.newVirtualThreadPerTaskExecutor();
     }
 
     // ===================== Lifecycle =====================
@@ -292,11 +291,11 @@ public final class SequentialExecutor {
     // ===================== Reads =====================
 
     private <T> CompletableFuture<T> read(Function<io.disys.axis.mvcc.store.Reader, T> fn) throws InterruptedException {
-        return node.readIndex().thenApply(_ -> {
+        return node.readIndex().thenApplyAsync(_ -> {
             try (var r = store.reader()) {
                 return fn.apply(r);
             }
-        });
+        }, readers);
     }
 
     public CompletableFuture<GetResponse> get(GetRequest req) throws InterruptedException {
