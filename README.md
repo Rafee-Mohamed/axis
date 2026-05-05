@@ -220,6 +220,29 @@ axis/
 
 **Prerequisites**: Java 25+, Maven 3.9+
 
+Install prerequisites before running the setup script.
+
+**macOS**
+```bash
+brew install --cask temurin@25
+brew install maven
+```
+
+**Linux** - via [SDKMAN](https://sdkman.io)
+```bash
+curl -s "https://get.sdkman.io" | bash   # skip if already installed
+sdk install java 25-tem
+sdk install maven
+```
+
+**Windows**
+```
+winget install EclipseAdoptium.Temurin.25.JDK
+winget install Apache.Maven
+```
+
+`setup.sh` requires Bash. On Windows, run it inside Git Bash which ships with [Git for Windows](https://git-scm.com/download/win).
+
 **1. Run the setup script**
 
 ```bash
